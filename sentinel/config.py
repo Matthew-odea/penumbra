@@ -51,9 +51,9 @@ class Settings(BaseSettings):
     aws_access_key_id: str = ""
     aws_secret_access_key: str = ""
     aws_region: str = "us-east-1"
-    bedrock_tier1_model: str = "meta.llama3-8b-instruct-v1:0"
+    bedrock_tier1_model: str = "amazon.nova-lite-v1:0"
     bedrock_tier1_daily_limit: int = 200
-    bedrock_tier2_model: str = "anthropic.claude-3-5-sonnet-20241022-v2:0"
+    bedrock_tier2_model: str = "amazon.nova-pro-v1:0"
     bedrock_tier2_daily_limit: int = 30
     bedrock_tier2_min_suspicion: int = 60
 

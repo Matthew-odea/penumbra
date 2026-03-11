@@ -48,7 +48,7 @@ run-judge: ## Run the AI judge (Sprint 3)
 run-api: ## Run the FastAPI gateway
 	uvicorn sentinel.api.main:app --host 0.0.0.0 --port 8000 --reload
 
-run-dashboard: ## Run the Next.js dashboard
+run-dashboard: ## Run the Vite+React dashboard
 	cd dashboard && npm run dev
 
 # ── Quality ───────────────────────────────────────────────────────────────────

@@ -136,29 +136,12 @@ wallet = supabase.table("wallets") \
     .execute()
 ```
 
-## Dashboard Integration (Next.js)
+## Dashboard Integration
 
-```typescript
-import { createClient } from '@supabase/supabase-js'
-
-const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!  // Anon key for reads
-)
-
-// Real-time subscription
-supabase
-  .channel('signals')
-  .on('postgres_changes', {
-    event: 'INSERT',
-    schema: 'public',
-    table: 'signals',
-    filter: 'suspicion_score=gte.80'
-  }, (payload) => {
-    console.log('HIGH SUSPICION SIGNAL:', payload.new)
-  })
-  .subscribe()
-```
+> **Note:** The dashboard (Vite + React) now reads all data from the
+> **FastAPI gateway** (`/api/signals`, `/api/markets`, etc.) which queries
+> DuckDB directly. Supabase is retained as an optional persistent store
+> and for future Realtime subscriptions if needed.
 
 ## Backup Strategy
 

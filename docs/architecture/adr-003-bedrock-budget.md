@@ -1,41 +1,41 @@
 # ADR-003: Bedrock Budget Cap & Call Queue
 
-**Status:** Accepted  
+**Status:** Accepted (Updated)  
 **Date:** 2026-03-11  
 **Deciders:** Core team
 
 ## Context
 
 AWS Bedrock pricing (as of March 2026):
-- **Llama 3 8B**: ~$0.0003/1K input tokens, ~$0.0006/1K output tokens
-- **Claude 3.5 Sonnet**: ~$0.003/1K input tokens, ~$0.015/1K output tokens
+- **Amazon Nova Lite**: ~$0.00006/1K input tokens, ~$0.00024/1K output tokens
+- **Amazon Nova Pro**: ~$0.0008/1K input tokens, ~$0.0032/1K output tokens
 
 A typical "Judge" call includes:
 - Input: ~800 tokens (5 headlines + trade context + system prompt)
 - Output: ~200 tokens (2-sentence reasoning + score)
 
 Per-call cost estimate:
-- Llama 3 8B (classifier): ~$0.0004
-- Claude 3.5 Sonnet (deep reasoning): ~$0.005
+- Nova Lite (classifier): ~$0.0001
+- Nova Pro (deep reasoning): ~$0.001
 
 If the statistical filter is miscalibrated and flags **500 trades/day**:
-- All to Llama 3: $0.20/day → fine
-- All to Claude 3.5: $2.50/day → acceptable but wasteful
+- All to Nova Lite: $0.05/day → fine
+- All to Nova Pro: $0.50/day → acceptable but wasteful
 - Uncapped: Risk of runaway costs if a market event triggers mass flagging
 
 ## Decision
 
 Implement a **two-tier call budget with priority queue**:
 
-### Tier 1: Llama 3 8B (Classifier)
+### Tier 1: Amazon Nova Lite (Classifier)
 - **Budget**: 200 calls/day (hard cap)
 - **Purpose**: Quick classification — "Informed" vs "Retail Noise" with a confidence score
 - **Trigger**: Every trade that passes the Statistical Filter
 
-### Tier 2: Claude 3.5 Sonnet (Deep Reasoner)
+### Tier 2: Amazon Nova Pro (Deep Reasoner)
 - **Budget**: 30 calls/day (hard cap)
 - **Purpose**: Detailed 2-sentence explanation for the highest-suspicion trades
-- **Trigger**: Only trades where Llama 3 returns suspicion ≥ 60
+- **Trigger**: Only trades where Nova Lite returns suspicion ≥ 60
 
 ### Priority Queue
 When the daily budget is exhausted:
@@ -50,17 +50,17 @@ When the daily budget is exhausted:
 
 ## Consequences
 
-- **Worst-case daily cost**: 200 × $0.0004 + 30 × $0.005 = $0.08 + $0.15 = **$0.23/day** (~$7/month)
+- **Worst-case daily cost**: 200 × $0.0001 + 30 × $0.001 = $0.02 + $0.03 = **$0.05/day** (~$1.50/month)
 - **No surprise bills**: Hard caps prevent runaway costs even during mass-flagging events
-- **Trade-off**: Some genuinely interesting trades may not get Claude analysis on busy days. The queue ensures the *most* interesting ones are prioritized.
+- **Trade-off**: Some genuinely interesting trades may not get Nova Pro analysis on busy days. The queue ensures the *most* interesting ones are prioritized.
 
 ## Configuration
 
 All values configurable in `.env`:
 ```
-BEDROCK_TIER1_MODEL=meta.llama3-8b-instruct-v1:0
+BEDROCK_TIER1_MODEL=amazon.nova-lite-v1:0
 BEDROCK_TIER1_DAILY_LIMIT=200
-BEDROCK_TIER2_MODEL=anthropic.claude-3-5-sonnet-20241022-v2:0
+BEDROCK_TIER2_MODEL=amazon.nova-pro-v1:0
 BEDROCK_TIER2_DAILY_LIMIT=30
 BEDROCK_TIER2_MIN_SUSPICION=60
 ```

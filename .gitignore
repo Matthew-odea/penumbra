@@ -220,10 +220,9 @@ data/
 .env.local
 .env.production
 
-# Next.js dashboard
+# Dashboard (Vite + React)
 dashboard/node_modules/
-dashboard/.next/
-dashboard/out/
+dashboard/dist/
 
 # IDE
 .idea/

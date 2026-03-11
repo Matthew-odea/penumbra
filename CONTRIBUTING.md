@@ -38,8 +38,6 @@ make check
 ```bash
 cd dashboard
 npm install
-cp .env.example .env.local
-# Edit .env.local with Supabase keys
 npm run dev
 ```
 
@@ -56,7 +54,7 @@ sentinel/                 # Python core — the brain
 ├── alerts/               # Alert service (TBD)
 └── api/                  # FastAPI gateway
 
-dashboard/                # Next.js frontend — the face
+dashboard/                # Vite + React frontend — the face
 tests/                    # Mirrors sentinel/ structure
 scripts/                  # One-off utilities
 docs/                     # Architecture + integration docs

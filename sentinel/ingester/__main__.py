@@ -27,6 +27,8 @@ from sentinel.ingester.listener import Listener
 from sentinel.ingester.markets import sync_markets, fetch_active_asset_ids
 from sentinel.ingester.models import BookEvent, Trade
 from sentinel.ingester.writer import BatchWriter
+from sentinel.judge.pipeline import Judge
+from sentinel.judge.store import Alert
 from sentinel.scanner.pipeline import Scanner
 from sentinel.scanner.scorer import Signal
 
@@ -56,8 +58,9 @@ async def run_ingester(
     # Scanner queue — consumed by the Scanner (Sprint 2)
     scanner_queue: asyncio.Queue[list[Trade | BookEvent]] = asyncio.Queue()
 
-    # Judge queue — placeholder for Sprint 3 consumption
+    # Judge queue — consumed by the Judge (Sprint 3)
     judge_queue: asyncio.Queue[Signal] = asyncio.Queue()
+    alert_queue: asyncio.Queue[Alert] = asyncio.Queue()
 
     writer = BatchWriter(
         conn,
@@ -135,6 +138,19 @@ async def run_ingester(
             asyncio.create_task(scanner.run(), name="scanner")
         )
 
+    # 5. Judge — consumes from judge_queue, emits to alert_queue
+    judge = None
+    if not dry_run and conn is not None:
+        judge = Judge(
+            conn,
+            judge_queue=judge_queue,
+            alert_queue=alert_queue,
+            dry_run=dry_run,
+        )
+        tasks.append(
+            asyncio.create_task(judge.run(), name="judge")
+        )
+
     mode = "DRY RUN" if dry_run else "LIVE"
     logger.info(
         f"Ingester running [{mode}]",
@@ -156,6 +172,8 @@ async def run_ingester(
         listener.stop()
         if scanner is not None:
             scanner.stop()
+        if judge is not None:
+            judge.stop()
         # Final flush of any remaining trades
         await writer.flush()
         for t in tasks:
@@ -167,6 +185,8 @@ async def run_ingester(
             ws_book_events=listener.book_event_count,
             scanner_trades=scanner.trades_scanned if scanner else 0,
             scanner_signals=scanner.signals_emitted if scanner else 0,
+            judge_processed=judge.signals_processed if judge else 0,
+            judge_alerts=judge.alerts_emitted if judge else 0,
         )
         if conn is not None:
             conn.close()

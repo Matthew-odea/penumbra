@@ -8,8 +8,8 @@
 
 | Tier | Model | Role | Cost/call | Daily Cap |
 |------|-------|------|-----------|-----------|
-| **1 — Classifier** | Llama 3 8B Instruct | Quick "Informed vs Noise" classification | ~$0.0004 | 200 |
-| **2 — Reasoner** | Claude 3.5 Sonnet | Detailed reasoning for high-suspicion trades | ~$0.005 | 30 |
+| **1 — Classifier** | Amazon Nova Lite | Quick “Informed vs Noise” classification | ~$0.0001 | 200 |
+| **2 — Reasoner** | Amazon Nova Pro | Detailed reasoning for high-suspicion trades | ~$0.002 | 30 |
 
 See [ADR-003](../architecture/adr-003-bedrock-budget.md) for full cost analysis.
 
@@ -26,8 +26,8 @@ See [ADR-003](../architecture/adr-003-bedrock-budget.md) for full cost analysis.
 
 1. AWS account with Bedrock access enabled in your region (us-east-1 or us-west-2)
 2. Request model access for:
-   - `meta.llama3-8b-instruct-v1:0`
-   - `anthropic.claude-3-5-sonnet-20241022-v2:0`
+   - `amazon.nova-lite-v1:0`
+   - `amazon.nova-pro-v1:0`
 3. IAM user/role with `bedrock:InvokeModel` permission
 
 ### IAM Policy
@@ -43,8 +43,8 @@ See [ADR-003](../architecture/adr-003-bedrock-budget.md) for full cost analysis.
         "bedrock:InvokeModelWithResponseStream"
       ],
       "Resource": [
-        "arn:aws:bedrock:us-east-1::foundation-model/meta.llama3-8b-instruct-v1:0",
-        "arn:aws:bedrock:us-east-1::foundation-model/anthropic.claude-3-5-sonnet-20241022-v2:0"
+        "arn:aws:bedrock:us-east-1::foundation-model/amazon.nova-lite-v1:0",
+        "arn:aws:bedrock:us-east-1::foundation-model/amazon.nova-pro-v1:0"
       ]
     }
   ]
@@ -66,33 +66,41 @@ bedrock = boto3.client(
 )
 
 
-def invoke_llama3(prompt: str) -> dict:
+def invoke_nova_lite(messages: list[dict], system: str = "") -> dict:
     """Tier 1: Quick classification."""
+    body = {
+        "schemaVersion": "messages-v1",
+        "messages": messages,
+        "inferenceConfig": {
+            "maxTokens": 256,
+            "temperature": 0.1,
+            "topP": 0.9,
+        },
+    }
+    if system:
+        body["system"] = [{"text": system}]
     response = bedrock.invoke_model(
         modelId=settings.bedrock_tier1_model,
         contentType="application/json",
         accept="application/json",
-        body=json.dumps({
-            "prompt": prompt,
-            "max_gen_len": 256,
-            "temperature": 0.1,
-            "top_p": 0.9,
-        }),
+        body=json.dumps(body),
     )
     return json.loads(response["body"].read())
 
 
-def invoke_claude(messages: list[dict]) -> dict:
+def invoke_nova_pro(messages: list[dict]) -> dict:
     """Tier 2: Deep reasoning."""
     response = bedrock.invoke_model(
         modelId=settings.bedrock_tier2_model,
         contentType="application/json",
         accept="application/json",
         body=json.dumps({
-            "anthropic_version": "bedrock-2023-05-31",
-            "max_tokens": 512,
-            "temperature": 0.2,
+            "schemaVersion": "messages-v1",
             "messages": messages,
+            "inferenceConfig": {
+                "maxTokens": 512,
+                "temperature": 0.2,
+            },
         }),
     )
     return json.loads(response["body"].read())
@@ -100,17 +108,22 @@ def invoke_claude(messages: list[dict]) -> dict:
 
 ## Prompt Design
 
-### Tier 1 — Classifier Prompt (Llama 3)
+### Tier 1 — Classifier Prompt (Amazon Nova Lite)
 
+Both tiers use the Amazon Nova `messages-v1` schema. The system prompt is passed
+via the `system` array and the trade context as a `user` message with content blocks:
+
+**System:**
 ```
-<|begin_of_turn|>system
 You are a prediction market analyst. Classify whether this trade is likely
 "INFORMED" (based on private/early information) or "NOISE" (retail speculation).
 
 Respond with EXACTLY this JSON:
 {"classification": "INFORMED"|"NOISE", "confidence": 0-100, "one_liner": "..."}
-<|end_of_turn|>
-<|begin_of_turn|>user
+```
+
+**User:**
+```
 TRADE CONTEXT:
 - Market: "{market_question}"
 - Category: {category}
@@ -124,10 +137,22 @@ RECENT NEWS (last 24h):
 {news_headlines}
 
 Is this trade INFORMED or NOISE?
-<|end_of_turn|>
 ```
 
-### Tier 2 — Reasoner Prompt (Claude)
+**Response format (Nova):**
+```json
+{
+  "output": {
+    "message": {
+      "role": "assistant",
+      "content": [{"text": "{\"classification\": ...}"}]
+    }
+  },
+  "usage": {"inputTokens": 150, "outputTokens": 40}
+}
+```
+
+### Tier 2 — Reasoner Prompt (Amazon Nova Pro)
 
 ```json
 {
@@ -146,7 +171,7 @@ Is this trade INFORMED or NOISE?
 from botocore.exceptions import ClientError
 
 try:
-    result = invoke_llama3(prompt)
+    result = invoke_nova_lite(messages, system=system_prompt)
 except ClientError as e:
     error_code = e.response["Error"]["Code"]
     if error_code == "ThrottlingException":
@@ -166,9 +191,9 @@ except ClientError as e:
 AWS_ACCESS_KEY_ID=AKIA...
 AWS_SECRET_ACCESS_KEY=...
 AWS_REGION=us-east-1
-BEDROCK_TIER1_MODEL=meta.llama3-8b-instruct-v1:0
+BEDROCK_TIER1_MODEL=amazon.nova-lite-v1:0
 BEDROCK_TIER1_DAILY_LIMIT=200
-BEDROCK_TIER2_MODEL=anthropic.claude-3-5-sonnet-20241022-v2:0
+BEDROCK_TIER2_MODEL=amazon.nova-pro-v1:0
 BEDROCK_TIER2_DAILY_LIMIT=30
 BEDROCK_TIER2_MIN_SUSPICION=60
 ```
