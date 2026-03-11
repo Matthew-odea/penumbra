@@ -205,3 +205,26 @@ cython_debug/
 marimo/_static/
 marimo/_lsp/
 __marimo__/
+
+# =============================================================================
+# Penumbra — Project-Specific
+# =============================================================================
+
+# DuckDB data files
+data/
+*.duckdb
+*.duckdb.wal
+
+# Environment secrets
+.env
+.env.local
+.env.production
+
+# Next.js dashboard
+dashboard/node_modules/
+dashboard/.next/
+dashboard/out/
+
+# IDE
+.idea/
+.vscode/settings.json
