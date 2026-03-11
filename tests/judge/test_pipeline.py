@@ -237,7 +237,7 @@ class TestJudgePipeline:
         await judge_queue.put(signal)
 
         judge = Judge(
-            db, judge_queue=judge_queue, alert_queue=alert_queue, dry_run=True
+            db, judge_queue=judge_queue, alert_queue=alert_queue, dry_run=True, max_workers=1
         )
 
         async def _stop_after_drain():
@@ -263,7 +263,7 @@ class TestJudgePipeline:
         signal = _make_signal()
         await judge_queue.put(signal)
 
-        judge = Judge(db, judge_queue=judge_queue, alert_queue=alert_queue)
+        judge = Judge(db, judge_queue=judge_queue, alert_queue=alert_queue, max_workers=1)
 
         async def _stop_after_drain():
             await judge_queue.join()
@@ -366,7 +366,7 @@ class TestJudgePipeline:
         signal = _make_signal()
         await judge_queue.put(signal)
 
-        judge = Judge(db, judge_queue=judge_queue, alert_queue=alert_queue)
+        judge = Judge(db, judge_queue=judge_queue, alert_queue=alert_queue, max_workers=1)
 
         captured_kwargs = {}
 

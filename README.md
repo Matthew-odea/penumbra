@@ -105,7 +105,8 @@ See [docs/architecture/](docs/architecture/) for full ADRs. Highlights:
 
 - **DuckDB over ClickHouse/TimescaleDB**: Zero-ops, in-process OLAP. Perfect for a solo analyst running on a laptop or $5 VPS.
 - **Modified Z-Score**: MAD (Median Absolute Deviation) instead of standard deviation to handle fat-tailed volume distributions.
-- **Two-tier Bedrock budget cap**: 200 Nova Lite + 30 Nova Pro calls/day. Max cost ~$0.05/day. Queue prioritizes highest statistical-score trades.
+- **Parallel LLM processing**: 8-worker pool processes ~13,824 signals/day (up from ~1,800 sequential). Nova Lite-only mode: 5,000 calls/day (~$0.50/day).
+- **Smart news fetching**: 12-hour cache + only fetch for top signals (≥70) to stay within Tavily free tier (33 calls/day).
 - **Single-writer pipeline**: Ingester → Scanner → Judge share one DuckDB connection via asyncio queues.
 
 ## Alerts

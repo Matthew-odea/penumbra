@@ -24,7 +24,14 @@ logger = structlog.get_logger()
 # ── In-memory cache ─────────────────────────────────────────────────────────
 
 _cache: dict[str, tuple[float, list[str]]] = {}
-_CACHE_TTL_S = 3600  # 1 hour
+
+def _get_cache_ttl() -> float:
+    """Get cache TTL from settings (with fallback to 12 hours)."""
+    try:
+        from sentinel.config import settings
+        return settings.news_cache_ttl_hours * 3600
+    except Exception:
+        return 3600 * 12  # 12 hours fallback
 
 
 def _cache_key(market_id: str) -> str:
@@ -37,7 +44,7 @@ def _get_cached(market_id: str) -> list[str] | None:
     if entry is None:
         return None
     ts, headlines = entry
-    if time.monotonic() - ts > _CACHE_TTL_S:
+    if time.monotonic() - ts > _get_cache_ttl():
         del _cache[key]
         return None
     return headlines

@@ -52,10 +52,11 @@ class Settings(BaseSettings):
     aws_secret_access_key: str = ""
     aws_region: str = "us-east-1"
     bedrock_tier1_model: str = "amazon.nova-lite-v1:0"
-    bedrock_tier1_daily_limit: int = 200
+    bedrock_tier1_daily_limit: int = 5000
     bedrock_tier2_model: str = "amazon.nova-pro-v1:0"
-    bedrock_tier2_daily_limit: int = 30
+    bedrock_tier2_daily_limit: int = 0  # Disabled for high-throughput mode
     bedrock_tier2_min_suspicion: int = 60
+    judge_max_workers: int = 8  # Parallel LLM processing workers
 
     # ── Polygon / Alchemy ───────────────────────────────────────────────────
     polygon_rpc_url: str = "https://polygon-rpc.com"
@@ -68,6 +69,8 @@ class Settings(BaseSettings):
     exa_api_key: str = ""
     news_search_max_results: int = 5
     news_search_lookback_days: int = 3
+    news_cache_ttl_hours: int = 12  # Extended cache to reduce API calls
+    news_min_score: int = 70  # Only fetch news for high-scoring signals
 
     # ── Alerts ───────────────────────────────────────────────────────────
     alert_min_score: int = 80

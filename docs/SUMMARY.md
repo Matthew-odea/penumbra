@@ -51,24 +51,15 @@ Trades scoring ≥ 30 become `Signal` objects forwarded to the Judge.
 
 ### Stage 3 — Judge
 
-Two-tier LLM reasoning via AWS Bedrock:
+Parallel LLM reasoning via AWS Bedrock (8-worker pool):
 
 | Tier | Model | Budget | Purpose |
 |------|-------|--------|---------|
-| T1 | Amazon Nova Lite | 200/day | Quick classify: INFORMED vs NOISE + confidence |
-| T2 | Amazon Nova Pro | 30/day | Deep reasoning for T1 confidence ≥ 60 |
+| T1 | Amazon Nova Lite | 5,000/day | Quick classify: INFORMED vs NOISE + confidence |
+| T2 | Amazon Nova Pro | 0/day (disabled) | Deep reasoning for T1 confidence ≥ 60 (optional) |
 
-Also fetches news headlines via Tavily Search for context.  
-Results stored in `signal_reasoning` table.  
-Worst-case daily cost: **~$0.05**.
-
-### Stage 4 — Dashboard
-
-Vite + React + TypeScript + Tailwind CSS frontend with three pages:
-
-- **Feed** — Summary cards, score filter, signal table with expandable reasoning
-- **Market drill-down** — Volume chart (Recharts), market signals
-- **Wallet profiler** — Win rate, category breakdown, trade history
+**Throughput**: ~13,824 signals/day (up from ~1,800 sequential).  
+**News**: 12-hour cached headlines via Tavily Search, only fetched for signals ≥70.  
 
 Data served by FastAPI gateway from DuckDB.
 
@@ -99,7 +90,7 @@ Views: `v_hourly_volume`, `v_volume_anomalies`, `v_wallet_performance`
 |-----|----------|-----------|
 | [001](docs/architecture/adr-001-duckdb.md) | DuckDB as local OLAP | Zero-ops, in-process, perfect for single analyst |
 | [002](docs/architecture/adr-002-modified-zscore.md) | Modified Z-Score | Robust to fat-tailed volume distributions |
-| [003](docs/architecture/adr-003-bedrock-budget.md) | Two-tier budget cap | Hard caps prevent runaway LLM costs |
+| [003](docs/architecture/adr-003-bedrock-budget.md) | Parallel LLM + budget cap | 8-worker pool, Nova Lite-only, ~13K signals/day |
 | [004](docs/architecture/adr-004-pipeline-architecture.md) | Single-writer pipeline | Asyncio queues, no multi-process complexity |
 
 ## Test Suite

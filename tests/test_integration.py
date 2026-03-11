@@ -345,7 +345,7 @@ class TestScannerJudgeIntegration:
         alert_queue: asyncio.Queue[Alert] = asyncio.Queue()
         await judge_queue.put(sig)
 
-        judge = Judge(conn, judge_queue=judge_queue, alert_queue=alert_queue)
+        judge = Judge(conn, judge_queue=judge_queue, alert_queue=alert_queue, max_workers=1)
 
         t1_result = ClassificationResult(
             classification="INFORMED", confidence=85,
@@ -417,7 +417,7 @@ class TestScannerJudgeIntegration:
         alert_queue: asyncio.Queue[Alert] = asyncio.Queue()
         await judge_queue.put(sig)
 
-        judge = Judge(conn, judge_queue=judge_queue, alert_queue=alert_queue)
+        judge = Judge(conn, judge_queue=judge_queue, alert_queue=alert_queue, max_workers=1)
 
         async def _stop_after_drain():
             await judge_queue.join()
