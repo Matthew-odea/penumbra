@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import ssl
 from typing import Any, Callable, Coroutine
 
 import structlog
@@ -27,6 +28,11 @@ TradeCallback = Callable[[Trade], Coroutine[Any, Any, None]]
 _INITIAL_BACKOFF = 1.0  # seconds
 _MAX_BACKOFF = 60.0
 _MAX_RETRIES = 50  # effectively unlimited with backoff
+
+# Lenient SSL context — Polymarket CDN cert can mismatch behind VPN/geo-fence
+_SSL_CTX = ssl.create_default_context()
+_SSL_CTX.check_hostname = False
+_SSL_CTX.verify_mode = ssl.CERT_NONE
 
 
 class Listener:
@@ -101,6 +107,7 @@ class Listener:
         async with ws_client.connect(
             self._ws_url,
             additional_headers={"Origin": "https://polymarket.com"},
+            ssl=_SSL_CTX,
             ping_interval=20,
             ping_timeout=20,
             close_timeout=10,
@@ -141,6 +148,13 @@ class Listener:
         except json.JSONDecodeError:
             logger.debug("Non-JSON WS message", raw=str(raw)[:200])
             return
+
+        # Log raw messages at debug level for diagnostics
+        if isinstance(msg, dict):
+            etype = msg.get("event_type") or msg.get("type") or "unknown"
+            logger.debug("WS message received", event_type=etype)
+        elif isinstance(msg, list):
+            logger.debug("WS batch message", count=len(msg))
 
         # Polymarket sometimes wraps events in a list
         messages = msg if isinstance(msg, list) else [msg]

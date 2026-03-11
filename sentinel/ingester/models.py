@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 
 
 @dataclass(frozen=True, slots=True)
@@ -98,7 +98,7 @@ def parse_ws_trade(msg: dict) -> Trade | None:
             timestamp=ts,
             tx_hash=data.get("transaction_hash"),
         )
-    except (KeyError, ValueError, TypeError):
+    except (KeyError, ValueError, TypeError, InvalidOperation):
         return None
 
 
@@ -123,5 +123,5 @@ def parse_rest_trade(raw: dict, market_id: str = "") -> Trade | None:
             timestamp=ts,
             tx_hash=raw.get("transaction_hash", raw.get("transactionHash")),
         )
-    except (KeyError, ValueError, TypeError):
+    except (KeyError, ValueError, TypeError, InvalidOperation):
         return None

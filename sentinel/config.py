@@ -22,6 +22,10 @@ class Settings(BaseSettings):
     # ── Polymarket ──────────────────────────────────────────────────────────
     polymarket_ws_url: str = "wss://ws-subscriptions-clob.polymarket.com/ws/market"
     polymarket_rest_url: str = "https://clob.polymarket.com"
+    # TODO: Replace with real Polymarket tags once live-tested.
+    #       Run `python -m sentinel.ingester --dry-run --timeout 30` and check
+    #       the actual tag values returned by the /markets endpoint.
+    #       Known real tags: Movies, Culture, Courts, Sports, Politics, Crypto, etc.
     polymarket_categories: str = "Biotech,Politics,Crypto,Science"
 
     @property

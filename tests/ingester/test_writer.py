@@ -110,7 +110,15 @@ class TestBatchWriter:
         writer = BatchWriter(db_conn, batch_size=1, dry_run=True)
         await writer.add(_make_trade())
         captured = capsys.readouterr()
-        parsed = json.loads(captured.out)
+        # stdout may contain structlog output after the JSON — extract first JSON object
+        lines = captured.out.strip().split("\n")
+        json_lines = []
+        for line in lines:
+            if line.startswith("{") or line.startswith(" ") or line.startswith("}"):
+                json_lines.append(line)
+            else:
+                break
+        parsed = json.loads("\n".join(json_lines))
         assert parsed["trade_id"] == "t-1"
         # DB should be empty in dry-run
         count = db_conn.execute("SELECT COUNT(*) FROM trades").fetchone()[0]
