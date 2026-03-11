@@ -5,9 +5,11 @@ as concurrent async tasks.
 
 Flags::
 
-    --dry-run     Print trades as JSON instead of writing to DuckDB
+    --dry-run     Print events as JSON instead of writing to DuckDB
     --timeout N   Stop after N seconds (useful for smoke tests)
-    --markets     Comma-separated condition_ids to subscribe to
+    --assets      Comma-separated token_ids (asset IDs) to subscribe to
+    --markets     Comma-separated condition_ids — resolved to asset IDs
+                  via the markets table (requires prior market sync)
 """
 
 from __future__ import annotations
@@ -22,9 +24,11 @@ import structlog
 from sentinel.config import settings
 from sentinel.db.init import init_schema
 from sentinel.ingester.listener import Listener
-from sentinel.ingester.markets import sync_markets
-from sentinel.ingester.models import Trade
+from sentinel.ingester.markets import sync_markets, fetch_active_asset_ids
+from sentinel.ingester.models import BookEvent, Trade
 from sentinel.ingester.writer import BatchWriter
+from sentinel.scanner.pipeline import Scanner
+from sentinel.scanner.scorer import Signal
 
 logger = structlog.get_logger()
 
@@ -44,13 +48,16 @@ async def run_ingester(
     *,
     dry_run: bool = False,
     timeout: int | None = None,
-    market_ids: list[str] | None = None,
+    asset_ids: list[str] | None = None,
 ) -> None:
     """Main async entry point for the ingester pipeline."""
     conn = None if dry_run else init_schema()
 
-    # Scanner queue — placeholder for Sprint 2 consumption
-    scanner_queue: asyncio.Queue[list[Trade]] = asyncio.Queue()
+    # Scanner queue — consumed by the Scanner (Sprint 2)
+    scanner_queue: asyncio.Queue[list[Trade | BookEvent]] = asyncio.Queue()
+
+    # Judge queue — placeholder for Sprint 3 consumption
+    judge_queue: asyncio.Queue[Signal] = asyncio.Queue()
 
     writer = BatchWriter(
         conn,
@@ -58,9 +65,31 @@ async def run_ingester(
         dry_run=dry_run,
     )
 
+    # Book event handler — forward to scanner queue (no DB persistence)
+    book_event_count = 0
+
+    async def _on_book_event(evt: BookEvent) -> None:
+        nonlocal book_event_count
+        book_event_count += 1
+        if dry_run:
+            print(json.dumps(evt.as_dict()))
+        if scanner_queue is not None:
+            await scanner_queue.put([evt])
+
+    # ── Resolve asset IDs ───────────────────────────────────────────────
+    if not asset_ids:
+        logger.info("No asset IDs provided — fetching active markets...")
+        try:
+            asset_ids = await fetch_active_asset_ids(limit=20)
+            logger.info("Auto-discovered active assets", count=len(asset_ids))
+        except Exception as exc:
+            logger.error("Failed to fetch active assets", error=str(exc))
+            asset_ids = []
+
     listener = Listener(
         on_trade=writer.add,
-        market_ids=market_ids or [],
+        on_book_event=_on_book_event,
+        asset_ids=asset_ids,
         dry_run=dry_run,
     )
 
@@ -93,10 +122,23 @@ async def run_ingester(
         asyncio.create_task(listener.run(), name="ws_listener")
     )
 
+    # 4. Scanner — consumes from scanner_queue, emits to judge_queue
+    scanner = None
+    if not dry_run and conn is not None:
+        scanner = Scanner(
+            conn,
+            scanner_queue=scanner_queue,
+            judge_queue=judge_queue,
+            dry_run=dry_run,
+        )
+        tasks.append(
+            asyncio.create_task(scanner.run(), name="scanner")
+        )
+
     mode = "DRY RUN" if dry_run else "LIVE"
     logger.info(
         f"Ingester running [{mode}]",
-        markets=len(market_ids) if market_ids else "all",
+        assets=len(asset_ids) if asset_ids else 0,
         batch_size=settings.ingester_batch_size,
         flush_interval=settings.ingester_flush_interval_seconds,
     )
@@ -112,6 +154,8 @@ async def run_ingester(
         pass
     finally:
         listener.stop()
+        if scanner is not None:
+            scanner.stop()
         # Final flush of any remaining trades
         await writer.flush()
         for t in tasks:
@@ -120,6 +164,9 @@ async def run_ingester(
             "Ingester stopped",
             total_trades=writer.total_written,
             ws_trades=listener.trade_count,
+            ws_book_events=listener.book_event_count,
+            scanner_trades=scanner.trades_scanned if scanner else 0,
+            scanner_signals=scanner.signals_emitted if scanner else 0,
         )
         if conn is not None:
             conn.close()
@@ -127,19 +174,23 @@ async def run_ingester(
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Penumbra trade ingester")
-    parser.add_argument("--dry-run", action="store_true", help="Print trades as JSON, skip DB")
+    parser.add_argument("--dry-run", action="store_true", help="Print events as JSON, skip DB")
     parser.add_argument("--timeout", type=int, default=None, help="Stop after N seconds")
-    parser.add_argument("--markets", type=str, default="", help="Comma-separated condition_ids")
+    parser.add_argument("--assets", type=str, default="", help="Comma-separated token_ids (asset IDs)")
+    parser.add_argument("--markets", type=str, default="", help="Comma-separated condition_ids (deprecated, use --assets)")
     args = parser.parse_args()
 
-    market_ids = [m.strip() for m in args.markets.split(",") if m.strip()] if args.markets else None
+    asset_ids = [a.strip() for a in args.assets.split(",") if a.strip()] if args.assets else None
+
+    if args.markets and not asset_ids:
+        logger.warning("--markets flag requires asset_id resolution (not yet implemented). Use --assets with token IDs instead.")
 
     try:
         asyncio.run(
             run_ingester(
                 dry_run=args.dry_run,
                 timeout=args.timeout,
-                market_ids=market_ids,
+                asset_ids=asset_ids,
             )
         )
     except KeyboardInterrupt:

@@ -1,11 +1,17 @@
-"""Tests for Trade model and WS/REST message parsers."""
+"""Tests for Trade, BookEvent models and WS/REST message parsers."""
 
 from datetime import UTC, datetime
 from decimal import Decimal
 
 import pytest
 
-from sentinel.ingester.models import Trade, parse_rest_trade, parse_ws_trade
+from sentinel.ingester.models import (
+    BookEvent,
+    Trade,
+    parse_price_changes,
+    parse_rest_trade,
+    parse_ws_trade,
+)
 
 # ── Fixtures ────────────────────────────────────────────────────────────────
 
@@ -164,4 +170,133 @@ class TestTradeModel:
         d = trade.as_dict()
         assert d["trade_id"] == "trade-001"
         assert d["price"] == "0.73"  # String representation
+        assert d["type"] == "trade"
+        assert "timestamp" in d
+
+
+# ── BookEvent / parse_price_changes tests ───────────────────────────────────
+
+
+def _price_change_msg(
+    *,
+    market: str = "0xabc123",
+    asset_id: str = "1154620873369832",
+    price: str = "0.03",
+    size: str = "41010",
+    side: str = "BUY",
+    hash_: str = "44baae6a60a0e4d65de84fd9738d45f0",
+    best_bid: str = "0.027",
+    best_ask: str = "0.029",
+    num_changes: int = 1,
+) -> dict:
+    changes = []
+    for i in range(num_changes):
+        changes.append({
+            "asset_id": f"{asset_id}_{i}" if num_changes > 1 else asset_id,
+            "price": price,
+            "size": size,
+            "side": side,
+            "hash": f"{hash_}_{i}" if num_changes > 1 else hash_,
+            "best_bid": best_bid,
+            "best_ask": best_ask,
+        })
+    return {"market": market, "price_changes": changes}
+
+
+class TestParsePriceChanges:
+    def test_basic_single_change(self):
+        msg = _price_change_msg()
+        events = parse_price_changes(msg)
+        assert len(events) == 1
+        evt = events[0]
+        assert isinstance(evt, BookEvent)
+        assert evt.market_id == "0xabc123"
+        assert evt.asset_id == "1154620873369832"
+        assert evt.side == "BUY"
+        assert evt.price == Decimal("0.03")
+        assert evt.size == Decimal("41010")
+        assert evt.best_bid == Decimal("0.027")
+        assert evt.best_ask == Decimal("0.029")
+        assert evt.event_id == "44baae6a60a0e4d65de84fd9738d45f0"
+
+    def test_multiple_changes(self):
+        msg = _price_change_msg(num_changes=3)
+        events = parse_price_changes(msg)
+        assert len(events) == 3
+        # Each should have a unique event_id
+        ids = {e.event_id for e in events}
+        assert len(ids) == 3
+
+    def test_empty_price_changes(self):
+        msg = {"market": "0xabc", "price_changes": []}
+        events = parse_price_changes(msg)
+        assert events == []
+
+    def test_no_price_changes_key(self):
+        msg = {"market": "0xabc", "bids": [{"price": "0.01", "size": "100"}]}
+        events = parse_price_changes(msg)
+        assert events == []
+
+    def test_malformed_entry_skipped(self):
+        msg = {
+            "market": "0xabc",
+            "price_changes": [
+                {"asset_id": "tok1", "price": "0.5", "size": "100", "side": "BUY",
+                 "hash": "h1", "best_bid": "0.4", "best_ask": "0.6"},
+                {"bad": "entry"},  # missing required fields
+                {"asset_id": "tok3", "price": "not-a-number", "size": "100",
+                 "side": "SELL", "hash": "h3", "best_bid": "0.4", "best_ask": "0.6"},
+            ],
+        }
+        events = parse_price_changes(msg)
+        assert len(events) == 1  # only the first valid one
+        assert events[0].event_id == "h1"
+
+    def test_side_normalised_to_upper(self):
+        msg = _price_change_msg(side="sell")
+        events = parse_price_changes(msg)
+        assert events[0].side == "SELL"
+
+    def test_zero_size_is_cancellation(self):
+        msg = _price_change_msg(size="0")
+        events = parse_price_changes(msg)
+        assert events[0].size == Decimal("0")
+
+    def test_timestamp_is_utc(self):
+        msg = _price_change_msg()
+        events = parse_price_changes(msg)
+        assert events[0].timestamp.tzinfo is not None
+
+    def test_missing_best_bid_ask_defaults_to_zero(self):
+        msg = {
+            "market": "0xabc",
+            "price_changes": [{
+                "asset_id": "tok1",
+                "price": "0.5",
+                "size": "100",
+                "side": "BUY",
+                "hash": "h1",
+            }],
+        }
+        events = parse_price_changes(msg)
+        assert len(events) == 1
+        assert events[0].best_bid == Decimal("0")
+        assert events[0].best_ask == Decimal("0")
+
+
+class TestBookEventModel:
+    def test_frozen(self):
+        msg = _price_change_msg()
+        evt = parse_price_changes(msg)[0]
+        with pytest.raises(AttributeError):
+            evt.event_id = "new"  # type: ignore[misc]
+
+    def test_as_dict(self):
+        msg = _price_change_msg()
+        evt = parse_price_changes(msg)[0]
+        d = evt.as_dict()
+        assert d["type"] == "book_event"
+        assert d["market_id"] == "0xabc123"
+        assert d["price"] == "0.03"
+        assert d["size"] == "41010"
         assert "timestamp" in d

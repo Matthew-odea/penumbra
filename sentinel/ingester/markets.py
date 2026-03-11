@@ -132,3 +132,38 @@ async def sync_markets(conn: Any, *, base_url: str | None = None) -> int:
     """
     markets = await fetch_all_markets(base_url=base_url)
     return upsert_markets(conn, markets)
+
+
+async def fetch_active_asset_ids(
+    *,
+    base_url: str | None = None,
+    limit: int = 20,
+) -> list[str]:
+    """Fetch token IDs for the most actively-traded markets.
+
+    Uses the ``/sampling-markets`` endpoint which returns the top markets
+    by recent activity.  Extracts both YES and NO token IDs from each market.
+
+    Args:
+        base_url: Override for the REST URL.
+        limit: Max number of markets to pull (each yields 2 token IDs).
+
+    Returns:
+        A flat list of asset_id strings (token IDs).
+    """
+    url = base_url or settings.polymarket_rest_url
+    asset_ids: list[str] = []
+
+    async with httpx.AsyncClient(verify=False, timeout=30) as client:
+        resp = await client.get(f"{url}/sampling-markets", params={"limit": limit})
+        resp.raise_for_status()
+        data = resp.json()
+
+    for market in data:
+        for token in market.get("tokens", []):
+            tid = token.get("token_id", "")
+            if tid:
+                asset_ids.append(tid)
+
+    logger.info("Fetched active asset IDs", markets=len(data), assets=len(asset_ids))
+    return asset_ids

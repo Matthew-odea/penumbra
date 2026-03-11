@@ -120,6 +120,7 @@ class TestBatchWriter:
                 break
         parsed = json.loads("\n".join(json_lines))
         assert parsed["trade_id"] == "t-1"
+        assert parsed["type"] == "trade"
         # DB should be empty in dry-run
         count = db_conn.execute("SELECT COUNT(*) FROM trades").fetchone()[0]
         assert count == 0

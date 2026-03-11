@@ -1,10 +1,22 @@
-"""Data models for the Polymarket ingester."""
+"""Data models for the Polymarket ingester.
+
+Two primary event types flow through the pipeline:
+
+* **Trade** — an actual trade execution (when available via WS or REST).
+* **BookEvent** — a price-change from the order-book WebSocket feed.
+  These are the *primary* real-time data source; they show order placement /
+  cancellation *before* execution, which is ideal for informed-flow detection.
+"""
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
+from typing import Union
+
+
+# ── Trade ────────────────────────────────────────────────────────────────────
 
 
 @dataclass(frozen=True, slots=True)
@@ -39,6 +51,7 @@ class Trade:
     def as_dict(self) -> dict:
         """Serialise to a dict (useful for --dry-run JSON output)."""
         return {
+            "type": "trade",
             "trade_id": self.trade_id,
             "market_id": self.market_id,
             "asset_id": self.asset_id,
@@ -49,6 +62,53 @@ class Trade:
             "timestamp": self.timestamp.isoformat(),
             "tx_hash": self.tx_hash,
         }
+
+
+# ── BookEvent ────────────────────────────────────────────────────────────────
+
+
+@dataclass(frozen=True, slots=True)
+class BookEvent:
+    """A price-change event from the Polymarket order-book WebSocket.
+
+    Each ``price_changes`` array entry in a WS message becomes one BookEvent.
+    ``size == 0`` means the level was cancelled; a non-zero ``size`` means a
+    new or updated resting order at that price.
+    """
+
+    event_id: str  # order hash from the WS message
+    market_id: str  # condition_id (hex)
+    asset_id: str  # token_id
+    side: str  # BUY or SELL
+    price: Decimal  # order price level
+    size: Decimal  # order size (USDC); 0 = level removed
+    best_bid: Decimal  # current best bid after this change
+    best_ask: Decimal  # current best ask after this change
+    timestamp: datetime  # ingestion timestamp (WS doesn't provide one for price_changes)
+
+    # ── helpers ──────────────────────────────────────────────────────────
+
+    def as_dict(self) -> dict:
+        """Serialise to a dict (useful for --dry-run JSON output)."""
+        return {
+            "type": "book_event",
+            "event_id": self.event_id,
+            "market_id": self.market_id,
+            "asset_id": self.asset_id,
+            "side": self.side,
+            "price": str(self.price),
+            "size": str(self.size),
+            "best_bid": str(self.best_bid),
+            "best_ask": str(self.best_ask),
+            "timestamp": self.timestamp.isoformat(),
+        }
+
+
+# Type alias used by the scanner queue
+IngesterEvent = Union[Trade, BookEvent]
+
+
+# ── Parsers ──────────────────────────────────────────────────────────────────
 
 
 def parse_ws_trade(msg: dict) -> Trade | None:
@@ -100,6 +160,59 @@ def parse_ws_trade(msg: dict) -> Trade | None:
         )
     except (KeyError, ValueError, TypeError, InvalidOperation):
         return None
+
+
+def parse_price_changes(msg: dict) -> list[BookEvent]:
+    """Parse a WS message containing ``price_changes`` into BookEvent objects.
+
+    Expected shape::
+
+        {
+          "market": "0x...",        // condition_id (hex)
+          "price_changes": [
+            {
+              "asset_id": "115462...",
+              "price": "0.03",
+              "size": "41010",
+              "side": "BUY",
+              "hash": "44baae6a...",
+              "best_bid": "0.027",
+              "best_ask": "0.029"
+            },
+            ...
+          ]
+        }
+
+    Returns an empty list if the message has no ``price_changes`` key or if
+    all entries are malformed.
+    """
+    market_id = str(msg.get("market", ""))
+    changes = msg.get("price_changes")
+    if not changes:
+        return []
+
+    now = datetime.now(tz=UTC)
+    events: list[BookEvent] = []
+
+    for c in changes:
+        try:
+            events.append(
+                BookEvent(
+                    event_id=str(c.get("hash", "")),
+                    market_id=market_id,
+                    asset_id=str(c["asset_id"]),
+                    side=str(c.get("side", "UNKNOWN")).upper(),
+                    price=Decimal(str(c["price"])),
+                    size=Decimal(str(c["size"])),
+                    best_bid=Decimal(str(c.get("best_bid", "0"))),
+                    best_ask=Decimal(str(c.get("best_ask", "0"))),
+                    timestamp=now,
+                )
+            )
+        except (KeyError, ValueError, TypeError, InvalidOperation):
+            continue
+
+    return events
 
 
 def parse_rest_trade(raw: dict, market_id: str = "") -> Trade | None:

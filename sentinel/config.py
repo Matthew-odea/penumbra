@@ -28,6 +28,12 @@ class Settings(BaseSettings):
     #       Known real tags: Movies, Culture, Courts, Sports, Politics, Crypto, etc.
     polymarket_categories: str = "Biotech,Politics,Crypto,Science"
 
+    # L2 auth — set via `python scripts/setup_l2.py`
+    polymarket_private_key: str = ""
+    polymarket_api_key: str = ""
+    polymarket_api_secret: str = ""
+    polymarket_api_passphrase: str = ""
+
     @property
     def categories_list(self) -> list[str]:
         """Parse comma-separated categories into a list."""
@@ -73,6 +79,12 @@ class Settings(BaseSettings):
     wallet_min_trades: int = 5
     wallet_whitelist_win_rate: float = 0.65
     wallet_whitelist_min_trades: int = 20
+
+    # Scorer weight caps (points out of 100)
+    scorer_weight_volume: int = 40
+    scorer_weight_impact: int = 20
+    scorer_weight_wallet: int = 20
+    scorer_weight_funding: int = 20
 
     # ── Ingester ────────────────────────────────────────────────────────────
     ingester_batch_size: int = 100

@@ -32,6 +32,7 @@ from pathlib import Path
 import httpx
 import structlog
 
+from sentinel.auth import has_l2_auth
 from sentinel.config import settings
 from sentinel.db.init import init_schema
 from sentinel.ingester.markets import fetch_all_markets
@@ -39,11 +40,48 @@ from sentinel.ingester.models import Trade, parse_rest_trade
 
 logger = structlog.get_logger()
 
-# CLOB trades endpoint (requires L2 auth, but we try with API key header)
+# CLOB trades endpoint (requires L2 auth)
 _TRADES_PATH = "/data/trades"
 _END_CURSOR = "LTE="
 _RATE_LIMIT_DELAY = 0.65  # ~100 req/min → 600 ms between requests
 _CURSOR_FILE = Path("data/.backfill_cursor.json")
+
+
+def _build_signer(host: str) -> callable:
+    """Return a callable that produces signed L2 headers for /data/trades.
+
+    If no private key is configured, returns a callable producing empty headers.
+    """
+    pk = settings.polymarket_private_key
+    if not pk:
+        return lambda: {}
+
+    try:
+        from py_clob_client.client import ClobClient
+        from py_clob_client.clob_types import RequestArgs
+        from py_clob_client.headers.headers import create_level_2_headers
+
+        client = ClobClient(host=host, key=pk, chain_id=137)
+        # Set API creds from .env
+        if settings.polymarket_api_key:
+            from py_clob_client.clob_types import ApiCreds
+            client.set_api_creds(ApiCreds(
+                api_key=settings.polymarket_api_key,
+                api_secret=settings.polymarket_api_secret,
+                api_passphrase=settings.polymarket_api_passphrase,
+            ))
+        else:
+            client.set_api_creds(client.create_or_derive_api_creds())
+
+        def _sign() -> dict[str, str]:
+            request_args = RequestArgs(method="GET", request_path=_TRADES_PATH)
+            return create_level_2_headers(client.signer, client.creds, request_args)
+
+        return _sign
+
+    except Exception as exc:
+        logger.warning("Failed to build L2 signer", error=str(exc))
+        return lambda: {}
 
 
 def _save_cursor(market_id: str, cursor: str) -> None:
@@ -69,13 +107,12 @@ async def backfill_market(
     conn: object | None = None,
     days: int = 7,
     dry_run: bool = False,
-    api_key: str = "",
-    api_secret: str = "",
-    api_passphrase: str = "",
     base_url: str | None = None,
 ) -> int:
     """Backfill trades for a single market.
 
+    Uses the ``py-clob-client`` SDK for authenticated requests, falling
+    back to raw httpx when no L2 auth is configured.
     Returns the number of trades ingested.
     """
     url = base_url or settings.polymarket_rest_url
@@ -84,14 +121,12 @@ async def backfill_market(
     total = 0
     page = 0
 
-    headers: dict[str, str] = {}
-    if api_key:
-        headers["POLY_API_KEY"] = api_key
-        headers["POLY_API_SECRET"] = api_secret
-        headers["POLY_PASSPHRASE"] = api_passphrase
+    # Build L2 signing headers per-request via SDK
+    _sign_headers = _build_signer(url)
 
     async with httpx.AsyncClient(verify=False, timeout=30) as client:
         while cursor and cursor != _END_CURSOR:
+            headers = _sign_headers()
             resp = await client.get(
                 f"{url}{_TRADES_PATH}",
                 params={"market": market_id, "next_cursor": cursor},
@@ -101,7 +136,7 @@ async def backfill_market(
             if resp.status_code == 401:
                 logger.error(
                     "Backfill requires L2 authentication. "
-                    "Set POLYMARKET_PRIVATE_KEY in .env or use WebSocket accumulation."
+                    "Run `python scripts/setup_l2.py` and update .env."
                 )
                 return total
 
@@ -183,6 +218,12 @@ async def run_backfill(
     if not market_ids:
         logger.warning("No markets found for backfill")
         return 0
+
+    if not has_l2_auth():
+        logger.warning(
+            "L2 auth not configured — /data/trades may return 401. "
+            "Run `python scripts/setup_l2.py` to set up."
+        )
 
     total = 0
     for i, mid in enumerate(market_ids, 1):
