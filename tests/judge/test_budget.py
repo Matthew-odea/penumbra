@@ -69,6 +69,7 @@ class TestBudgetStatus:
 
 
 class TestCanCall:
+    @patch("sentinel.judge.budget._TIER_LIMITS", {"tier1": 200, "tier2": 30})
     def test_can_call_when_empty(self, budget):
         assert budget.can_call("tier1") is True
         assert budget.can_call("tier2") is True
@@ -144,6 +145,7 @@ class TestGetStatus:
         assert status["tier1"].calls_used == 2
         assert status["tier2"].calls_used == 0
 
+    @patch("sentinel.judge.budget._TIER_LIMITS", {"tier1": 200, "tier2": 30})
     def test_limits_match_config(self, budget):
         status = budget.get_status()
         assert status["tier1"].calls_limit == 200
@@ -169,6 +171,7 @@ class TestMidnightReset:
 
 
 class TestBudgetExhaustion:
+    @patch("sentinel.judge.budget._TIER_LIMITS", {"tier1": 200, "tier2": 30})
     def test_201st_tier1_rejected(self, budget, db):
         """After 200 Tier 1 calls, the 201st should be rejected."""
         today = datetime.now(tz=UTC).date()

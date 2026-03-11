@@ -365,10 +365,12 @@ class TestScannerJudgeIntegration:
 
         stop_task = asyncio.create_task(_stop_after_drain())
 
+        # Mock settings & budget limits to enable tier2 (default is now disabled)
         with (
             patch("sentinel.judge.pipeline.fetch_news", new_callable=AsyncMock, return_value=["BTC surges on ETF news"]),
             patch("sentinel.judge.pipeline.classify", new_callable=AsyncMock, return_value=t1_result),
             patch("sentinel.judge.pipeline.reason", new_callable=AsyncMock, return_value=t2_result),
+            patch("sentinel.judge.budget._TIER_LIMITS", {"tier1": 5000, "tier2": 30}),
         ):
             await asyncio.gather(stop_task, judge.run())
 
@@ -398,9 +400,9 @@ class TestScannerJudgeIntegration:
         """With exhausted budget, judge should skip without errors."""
         conn = _full_db()
         today = datetime.now(tz=UTC).date()
-        # Exhaust tier1 budget
+        # Exhaust tier1 budget (set to match current limit from settings: 5000)
         conn.execute(
-            "INSERT OR REPLACE INTO llm_budget VALUES (?, 'tier1', 200, 200)", [today]
+            "INSERT OR REPLACE INTO llm_budget VALUES (?, 'tier1', 5000, 5000)", [today]
         )
 
         sig = build_signal(

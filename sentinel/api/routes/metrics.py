@@ -1,0 +1,205 @@
+"""Metrics endpoints — time-series pipeline activity and operational overview."""
+
+from __future__ import annotations
+
+from fastapi import APIRouter, Query
+
+from sentinel.api.deps import get_db
+
+router = APIRouter(tags=["metrics"])
+
+
+@router.get("/metrics/timeseries")
+async def timeseries(
+    hours: int = Query(6, ge=1, le=72),
+    bucket_minutes: int = Query(5, ge=1, le=60),
+) -> list[dict]:
+    """Bucketed pipeline activity over the last *hours*.
+
+    Returns one row per time bucket with counts for:
+    - trades ingested
+    - signals generated
+    - LLM T1 and T2 calls
+    - high-suspicion alerts (score >= 80)
+    """
+    db = get_db()
+
+    rows = db.execute(
+        """
+        WITH buckets AS (
+            SELECT
+                time_bucket(
+                    INTERVAL (? || ' minutes'),
+                    generate_series
+                ) AS bucket
+            FROM generate_series(
+                date_trunc('minute', CURRENT_TIMESTAMP - INTERVAL (? || ' hours')),
+                date_trunc('minute', CURRENT_TIMESTAMP),
+                INTERVAL (? || ' minutes')
+            )
+        ),
+        trade_counts AS (
+            SELECT
+                time_bucket(INTERVAL (? || ' minutes'), timestamp) AS bucket,
+                COUNT(*) AS cnt
+            FROM trades
+            WHERE timestamp >= CURRENT_TIMESTAMP - INTERVAL (? || ' hours')
+            GROUP BY 1
+        ),
+        signal_counts AS (
+            SELECT
+                time_bucket(INTERVAL (? || ' minutes'), created_at) AS bucket,
+                COUNT(*) AS cnt
+            FROM signals
+            WHERE created_at >= CURRENT_TIMESTAMP - INTERVAL (? || ' hours')
+            GROUP BY 1
+        ),
+        reasoning_counts AS (
+            SELECT
+                time_bucket(INTERVAL (? || ' minutes'), created_at) AS bucket,
+                COUNT(*) FILTER (WHERE tier1_model IS NOT NULL) AS t1,
+                COUNT(*) FILTER (WHERE tier2_model IS NOT NULL) AS t2,
+                COUNT(*) FILTER (WHERE suspicion_score >= 80)   AS alerts
+            FROM signal_reasoning
+            WHERE created_at >= CURRENT_TIMESTAMP - INTERVAL (? || ' hours')
+            GROUP BY 1
+        )
+        SELECT
+            b.bucket,
+            COALESCE(tc.cnt, 0)     AS trades,
+            COALESCE(sc.cnt, 0)     AS signals,
+            COALESCE(rc.t1, 0)      AS llm_t1,
+            COALESCE(rc.t2, 0)      AS llm_t2,
+            COALESCE(rc.alerts, 0)  AS alerts
+        FROM buckets b
+        LEFT JOIN trade_counts    tc ON b.bucket = tc.bucket
+        LEFT JOIN signal_counts   sc ON b.bucket = sc.bucket
+        LEFT JOIN reasoning_counts rc ON b.bucket = rc.bucket
+        ORDER BY b.bucket
+        """,
+        [
+            bucket_minutes, hours, bucket_minutes,  # buckets CTE
+            bucket_minutes, hours,                   # trade_counts
+            bucket_minutes, hours,                   # signal_counts
+            bucket_minutes, hours,                   # reasoning_counts
+        ],
+    ).fetchall()
+
+    return [
+        {
+            "bucket": r[0].isoformat(),
+            "trades": r[1],
+            "signals": r[2],
+            "llm_t1": r[3],
+            "llm_t2": r[4],
+            "alerts": r[5],
+        }
+        for r in rows
+    ]
+
+
+@router.get("/metrics/overview")
+async def overview() -> dict:
+    """Aggregate operational metrics for the metrics dashboard.
+
+    Returns:
+    - funnel: trades -> signals -> classified -> high suspicion (today)
+    - classification: INFORMED vs NOISE counts (today)
+    - score_distribution: suspicion score histogram (today)
+    - top_markets: markets with most signals (last 24h)
+    """
+    db = get_db()
+
+    # ── Detection funnel (today) ────────────────────────────────────
+    funnel_row = db.execute("""
+        SELECT
+            (SELECT COUNT(*) FROM trades
+             WHERE timestamp >= CURRENT_DATE)                     AS trades_today,
+            (SELECT COUNT(*) FROM signals
+             WHERE created_at >= CURRENT_DATE)                    AS signals_today,
+            (SELECT COUNT(*) FROM signal_reasoning
+             WHERE created_at >= CURRENT_DATE)                    AS classified_today,
+            (SELECT COUNT(*) FROM signal_reasoning
+             WHERE created_at >= CURRENT_DATE
+               AND suspicion_score >= 80)                         AS high_suspicion_today
+    """).fetchone()
+
+    funnel = {
+        "trades": funnel_row[0],
+        "signals": funnel_row[1],
+        "classified": funnel_row[2],
+        "high_suspicion": funnel_row[3],
+    }
+
+    # ── Classification breakdown (today) ────────────────────────────
+    class_rows = db.execute("""
+        SELECT
+            classification,
+            COUNT(*) AS cnt
+        FROM signal_reasoning
+        WHERE created_at >= CURRENT_DATE
+          AND classification IS NOT NULL
+        GROUP BY 1
+    """).fetchall()
+
+    classification = {r[0]: r[1] for r in class_rows}
+
+    # ── Score distribution (today) ──────────────────────────────────
+    dist_rows = db.execute("""
+        SELECT
+            CASE
+                WHEN COALESCE(sr.suspicion_score, s.statistical_score) < 20  THEN '0-19'
+                WHEN COALESCE(sr.suspicion_score, s.statistical_score) < 40  THEN '20-39'
+                WHEN COALESCE(sr.suspicion_score, s.statistical_score) < 60  THEN '40-59'
+                WHEN COALESCE(sr.suspicion_score, s.statistical_score) < 80  THEN '60-79'
+                ELSE '80-100'
+            END AS bucket,
+            COUNT(*) AS cnt
+        FROM signals s
+        LEFT JOIN signal_reasoning sr ON s.signal_id = sr.signal_id
+        WHERE s.created_at >= CURRENT_DATE
+        GROUP BY 1
+        ORDER BY 1
+    """).fetchall()
+
+    # Ensure all buckets present
+    score_distribution = {"0-19": 0, "20-39": 0, "40-59": 0, "60-79": 0, "80-100": 0}
+    for r in dist_rows:
+        score_distribution[r[0]] = r[1]
+
+    # ── Top flagged markets (last 24h) ──────────────────────────────
+    market_rows = db.execute("""
+        SELECT
+            s.market_id,
+            m.question,
+            m.category,
+            COUNT(*) AS signal_count,
+            MAX(COALESCE(sr.suspicion_score, s.statistical_score)) AS max_score,
+            AVG(COALESCE(sr.suspicion_score, s.statistical_score)) AS avg_score
+        FROM signals s
+        LEFT JOIN signal_reasoning sr ON s.signal_id = sr.signal_id
+        LEFT JOIN markets m ON s.market_id = m.market_id
+        WHERE s.created_at >= CURRENT_TIMESTAMP - INTERVAL '24 hours'
+        GROUP BY s.market_id, m.question, m.category
+        ORDER BY signal_count DESC
+        LIMIT 10
+    """).fetchall()
+
+    top_markets = [
+        {
+            "market_id": r[0],
+            "question": r[1],
+            "category": r[2],
+            "signal_count": r[3],
+            "max_score": r[4],
+            "avg_score": round(float(r[5]), 1) if r[5] else None,
+        }
+        for r in market_rows
+    ]
+
+    return {
+        "funnel": funnel,
+        "classification": classification,
+        "score_distribution": score_distribution,
+        "top_markets": top_markets,
+    }

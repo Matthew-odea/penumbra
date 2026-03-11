@@ -8,21 +8,8 @@
 # =============================================================================
 
 services:
-  # ── Python Engine (Ingester + Scanner + Judge) ────────────────────────────
+  # ── Penumbra (Pipeline + API in one process) ─────────────────────────────
   sentinel:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    env_file: .env
-    volumes:
-      - ./data:/app/data          # DuckDB file persistence
-      - ./sentinel:/app/sentinel  # Hot-reload source code
-    depends_on: []
-    restart: unless-stopped
-    command: python -m sentinel
-
-  # ── FastAPI Gateway ───────────────────────────────────────────────────────
-  api:
     build:
       context: .
       dockerfile: Dockerfile
@@ -30,23 +17,11 @@ services:
     ports:
       - "8000:8000"
     volumes:
-      - ./data:/app/data
-      - ./sentinel:/app/sentinel
-    command: uvicorn sentinel.api.main:app --host 0.0.0.0 --port 8000 --reload
+      - ./data:/app/data          # DuckDB file persistence
+      - ./sentinel:/app/sentinel  # Hot-reload source code (dev only)
     restart: unless-stopped
-
-  # ── Vite + React Dashboard ───────────────────────────────────────────────
-  dashboard:
-    build:
-      context: ./dashboard
-      dockerfile: Dockerfile
-    ports:
-      - "3000:3000"
-    environment:
-      - VITE_API_URL=http://api:8000
-    depends_on:
-      - api
-    restart: unless-stopped
+    # Runs: Ingester → Scanner → Judge + FastAPI on :8000
+    command: python -m sentinel --with-api
 
 volumes:
   data:

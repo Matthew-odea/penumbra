@@ -157,13 +157,24 @@ async def fetch_active_asset_ids(
     async with httpx.AsyncClient(verify=False, timeout=30) as client:
         resp = await client.get(f"{url}/sampling-markets", params={"limit": limit})
         resp.raise_for_status()
-        data = resp.json()
+        body = resp.json()
 
-    for market in data:
+    # Handle both response formats: array or {data: [...]}
+    if isinstance(body, list):
+        markets = body
+    elif isinstance(body, dict):
+        markets = body.get("data", [])
+    else:
+        logger.warning("Unexpected response format from /sampling-markets", type=type(body).__name__)
+        return []
+
+    for market in markets:
+        if not isinstance(market, dict):
+            continue
         for token in market.get("tokens", []):
             tid = token.get("token_id", "")
             if tid:
                 asset_ids.append(tid)
 
-    logger.info("Fetched active asset IDs", markets=len(data), assets=len(asset_ids))
+    logger.info("Fetched active asset IDs", markets=len(markets), assets=len(asset_ids))
     return asset_ids

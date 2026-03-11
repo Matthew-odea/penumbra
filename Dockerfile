@@ -18,4 +18,9 @@ COPY scripts/ scripts/
 # Create data directory
 RUN mkdir -p data
 
-CMD ["python", "-m", "sentinel"]
+EXPOSE 8000
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+  CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health')" || exit 1
+
+CMD ["python", "-m", "sentinel", "--with-api"]

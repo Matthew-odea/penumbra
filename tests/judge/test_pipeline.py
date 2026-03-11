@@ -252,6 +252,7 @@ class TestJudgePipeline:
         assert judge.signals_processed == 1
         assert judge.tier1_calls == 0  # No Bedrock in dry run
 
+    @patch("sentinel.judge.budget._TIER_LIMITS", {"tier1": 200, "tier2": 30})
     async def test_budget_exhausted_skips(self, db):
         """When Tier 1 budget is exhausted, signals are skipped."""
         # Exhaust tier1 budget
@@ -277,6 +278,7 @@ class TestJudgePipeline:
         assert judge.skipped_budget == 1
         assert judge.tier1_calls == 0
 
+    @patch("sentinel.judge.budget._TIER_LIMITS", {"tier1": 200, "tier2": 30})
     async def test_full_flow_mocked(self, db):
         """Full flow with mocked Bedrock: classify → reason → store → alert."""
         judge_queue: asyncio.Queue[Signal] = asyncio.Queue()

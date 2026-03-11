@@ -10,6 +10,8 @@ import type {
   WalletTrade,
   Budget,
   HealthStatus,
+  TimeseriesPoint,
+  MetricsOverview,
 } from './types'
 
 const BASE = '/api'
@@ -102,4 +104,17 @@ export function fetchBudget(): Promise<Budget> {
 
 export function fetchHealth(): Promise<HealthStatus> {
   return get<HealthStatus>(`${BASE}/health`)
+}
+
+/* ── Metrics ─────────────────────────────────────────────────────────── */
+
+export function fetchTimeseries(
+  hours = 6,
+  bucket_minutes = 5,
+): Promise<TimeseriesPoint[]> {
+  return get<TimeseriesPoint[]>(`${BASE}/metrics/timeseries`, { hours, bucket_minutes })
+}
+
+export function fetchMetricsOverview(): Promise<MetricsOverview> {
+  return get<MetricsOverview>(`${BASE}/metrics/overview`)
 }

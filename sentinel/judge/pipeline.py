@@ -134,12 +134,12 @@ class Judge:
         market_question, category, liquidity = self._lookup_market(signal.market_id)
 
         # ── News fetch (only for high-scoring signals) ──────────────────
-        headlines_str = ""
         if signal.statistical_score >= settings.news_min_score:
             headlines = await fetch_news(market_question, signal.market_id)
-            headlines_str = format_headlines(headlines)
         else:
             headlines = []
+        
+        headlines_str = format_headlines(headlines)  # Returns "No relevant news found." if empty
 
         # ── Tier 1 classification ───────────────────────────────────────
         if self._dry_run:

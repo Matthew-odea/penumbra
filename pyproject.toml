@@ -16,7 +16,7 @@ dependencies = [
     
     # Database
     "duckdb>=1.1.0",
-    "supabase>=2.0.0",
+    "pytz>=2024.1",
     
     # AWS Bedrock
     "boto3>=1.35.0",

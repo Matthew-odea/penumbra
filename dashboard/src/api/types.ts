@@ -113,3 +113,35 @@ export interface HealthStatus {
   status: string
   timestamp: string
 }
+
+/* ── Metrics ─────────────────────────────────────────────────────── */
+
+export interface TimeseriesPoint {
+  bucket: string
+  trades: number
+  signals: number
+  llm_t1: number
+  llm_t2: number
+  alerts: number
+}
+
+export interface MetricsOverview {
+  funnel: {
+    trades: number
+    signals: number
+    classified: number
+    high_suspicion: number
+  }
+  classification: Record<string, number>
+  score_distribution: Record<string, number>
+  top_markets: TopMarket[]
+}
+
+export interface TopMarket {
+  market_id: string
+  question: string | null
+  category: string | null
+  signal_count: number
+  max_score: number | null
+  avg_score: number | null
+}

@@ -27,6 +27,7 @@ export default function Layout() {
           {/* Nav */}
           <nav className="flex items-center gap-1">
             <NavItem to="/" label="Feed" active={location.pathname === '/'} />
+            <NavItem to="/metrics" label="Metrics" active={location.pathname === '/metrics'} />
           </nav>
         </div>
 

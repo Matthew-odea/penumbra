@@ -8,7 +8,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from sentinel.api.deps import close_db, get_db
-from sentinel.api.routes import budget, health, markets, signals, wallets
+from sentinel.api.routes import budget, health, markets, metrics, signals, wallets
 from sentinel.config import settings
 
 
@@ -41,3 +41,4 @@ app.include_router(signals.router, prefix="/api")
 app.include_router(markets.router, prefix="/api")
 app.include_router(wallets.router, prefix="/api")
 app.include_router(budget.router, prefix="/api")
+app.include_router(metrics.router, prefix="/api")

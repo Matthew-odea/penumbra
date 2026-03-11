@@ -12,6 +12,8 @@ import {
   fetchWalletSignals,
   fetchBudget,
   fetchHealth,
+  fetchTimeseries,
+  fetchMetricsOverview,
 } from '../api/client'
 
 const POLL = 10_000 // 10s refresh
@@ -96,5 +98,21 @@ export function useHealth() {
     queryKey: ['health'],
     queryFn: fetchHealth,
     refetchInterval: 15_000,
+  })
+}
+
+export function useTimeseries(hours = 6, bucketMinutes = 5) {
+  return useQuery({
+    queryKey: ['timeseries', hours, bucketMinutes],
+    queryFn: () => fetchTimeseries(hours, bucketMinutes),
+    refetchInterval: POLL,
+  })
+}
+
+export function useMetricsOverview() {
+  return useQuery({
+    queryKey: ['metrics-overview'],
+    queryFn: fetchMetricsOverview,
+    refetchInterval: POLL,
   })
 }
