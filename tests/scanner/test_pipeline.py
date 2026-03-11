@@ -42,6 +42,7 @@ def _init_db() -> duckdb.DuckDBPyConnection:
             size_usd DECIMAL(18,6),
             timestamp TIMESTAMP NOT NULL,
             tx_hash VARCHAR,
+            source VARCHAR DEFAULT 'ws',
             ingested_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     """)
@@ -225,13 +226,13 @@ class TestScannerPipeline:
         now = datetime.now(tz=UTC)
         for i in range(1, 6):
             conn.execute(
-                "INSERT INTO trades VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, CURRENT_TIMESTAMP)",
+                "INSERT INTO trades VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, 'ws', CURRENT_TIMESTAMP)",
                 [f"hist-{i}", "mkt-1", "a1", "0xother", "BUY", 0.5, 100.0,
                  now - timedelta(hours=i + 0.5)],
             )
         # Insert a spike trade in the current hour
         conn.execute(
-            "INSERT INTO trades VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, CURRENT_TIMESTAMP)",
+            "INSERT INTO trades VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, 'ws', CURRENT_TIMESTAMP)",
             ["spike-1", "mkt-1", "a1", "0xwhale", "BUY", 0.8, 50000.0,
              now - timedelta(minutes=5)],
         )

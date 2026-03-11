@@ -8,6 +8,8 @@ import pytest
 from sentinel.ingester.models import (
     BookEvent,
     Trade,
+    parse_data_api_trade,
+    parse_live_activity_event,
     parse_price_changes,
     parse_rest_trade,
     parse_ws_trade,
@@ -108,7 +110,10 @@ class TestParseWsTrade:
     def test_returns_none_for_missing_id(self):
         msg = _ws_trade_msg()
         del msg["data"]["id"]
-        assert parse_ws_trade(msg) is None
+        # Missing id is tolerated — a fallback trade_id is generated
+        trade = parse_ws_trade(msg)
+        assert trade is not None
+        assert trade.trade_id.startswith("ws-")
 
     def test_returns_none_for_bad_price(self):
         msg = _ws_trade_msg(price="not-a-number")
@@ -120,6 +125,22 @@ class TestParseWsTrade:
         trade = parse_ws_trade(msg)
         assert trade is not None
         assert trade.tx_hash is None
+
+    def test_flat_order_message_ignored(self):
+        """Flat messages with fee_rate_bps are order updates, not trades."""
+        msg = {
+            "market": "0xabc",
+            "asset_id": "0xtok",
+            "price": "0.65",
+            "size": "250.00",
+            "fee_rate_bps": "20",
+        }
+        assert parse_ws_trade(msg) is None
+
+    def test_non_trade_message_still_ignored(self):
+        """Messages without trade-like keys return None."""
+        msg = {"type": "heartbeat", "ts": 12345}
+        assert parse_ws_trade(msg) is None
 
 
 class TestParseRestTrade:
@@ -159,7 +180,7 @@ class TestTradeModel:
         trade = parse_ws_trade(_ws_trade_msg())
         assert trade is not None
         tup = trade.as_db_tuple()
-        assert len(tup) == 9
+        assert len(tup) == 10
         assert tup[0] == "trade-001"  # trade_id
         assert isinstance(tup[5], float)  # price as float for DuckDB
         assert isinstance(tup[6], float)  # size_usd as float
@@ -300,3 +321,107 @@ class TestBookEventModel:
         assert d["price"] == "0.03"
         assert d["size"] == "41010"
         assert "timestamp" in d
+
+
+# ── Data-API trade parser tests ──────────────────────────────────────────────
+
+
+def _data_api_trade(
+    *,
+    condition_id: str = "0xcondition123",
+    asset: str = "0xtoken456",
+    proxy_wallet: str = "0xwallet789",
+    side: str = "BUY",
+    size: float = 1500.00,
+    price: float = 0.65,
+    outcome: str = "Yes",
+    outcome_index: int = 0,
+    tx_hash: str = "0xtxhash",
+    timestamp: int = 1710000000,
+) -> dict:
+    return {
+        "proxyWallet": proxy_wallet,
+        "side": side,
+        "asset": asset,
+        "conditionId": condition_id,
+        "size": size,
+        "price": price,
+        "timestamp": timestamp,
+        "transactionHash": tx_hash,
+        "outcome": outcome,
+        "outcomeIndex": outcome_index,
+        "title": "Will X happen?",
+        "slug": "will-x-happen",
+        "name": "trader1",
+        "pseudonym": "Anonymous",
+        "icon": "https://example.com/icon.png",
+        "eventSlug": "will-x-happen-event",
+    }
+
+
+class TestParseDataApiTrade:
+    def test_basic(self):
+        raw = _data_api_trade()
+        trade = parse_data_api_trade(raw)
+        assert trade is not None
+        assert trade.market_id == "0xcondition123"
+        assert trade.asset_id == "0xtoken456"
+        assert trade.wallet == "0xwallet789"
+        assert trade.side == "BUY"
+        assert trade.price == Decimal("0.65")
+        assert trade.size_usd == Decimal("1500")
+        assert trade.tx_hash == "0xtxhash"
+        assert trade.trade_id == "0xtxhash"  # tx_hash used as trade_id
+        assert trade.timestamp.tzinfo is not None
+        assert trade.source == "rest"
+
+    def test_side_normalised_to_upper(self):
+        trade = parse_data_api_trade(_data_api_trade(side="sell"))
+        assert trade is not None
+        assert trade.side == "SELL"
+
+    def test_missing_condition_id_returns_none(self):
+        raw = _data_api_trade()
+        raw["conditionId"] = ""
+        assert parse_data_api_trade(raw) is None
+
+    def test_missing_wallet_returns_none(self):
+        raw = _data_api_trade()
+        raw["proxyWallet"] = ""
+        assert parse_data_api_trade(raw) is None
+
+    def test_bad_price_returns_none(self):
+        raw = _data_api_trade(price="not-a-number")  # type: ignore
+        assert parse_data_api_trade(raw) is None
+
+    def test_missing_tx_hash_generates_fallback_id(self):
+        raw = _data_api_trade()
+        raw["transactionHash"] = None
+        trade = parse_data_api_trade(raw)
+        assert trade is not None
+        assert trade.trade_id.startswith("da-")
+        assert trade.tx_hash is None
+
+    def test_missing_timestamp_uses_now(self):
+        raw = _data_api_trade()
+        del raw["timestamp"]
+        trade = parse_data_api_trade(raw)
+        assert trade is not None
+        assert trade.timestamp.tzinfo is not None
+        # Should be very recent
+        from datetime import datetime, UTC
+        delta = datetime.now(UTC) - trade.timestamp
+        assert delta.total_seconds() < 5
+
+    def test_empty_dict_returns_none(self):
+        assert parse_data_api_trade({}) is None
+
+    def test_completely_malformed_returns_none(self):
+        assert parse_data_api_trade({"garbage": True}) is None
+
+    def test_backward_compatible_alias(self):
+        """parse_live_activity_event is an alias for parse_data_api_trade."""
+        raw = _data_api_trade()
+        trade = parse_live_activity_event(raw)
+        assert trade is not None
+        assert trade.market_id == "0xcondition123"

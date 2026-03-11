@@ -32,6 +32,7 @@ class Trade:
     size_usd: Decimal  # trade size in USDC
     timestamp: datetime
     tx_hash: str | None = None
+    source: str = "ws"  # 'ws' (WebSocket) or 'rest' (poller)
 
     # ── helpers ──────────────────────────────────────────────────────────
     def as_db_tuple(self) -> tuple:
@@ -46,6 +47,7 @@ class Trade:
             float(self.size_usd),
             self.timestamp,
             self.tx_hash,
+            self.source,
         )
 
     def as_dict(self) -> dict:
@@ -61,6 +63,7 @@ class Trade:
             "size_usd": str(self.size_usd),
             "timestamp": self.timestamp.isoformat(),
             "tx_hash": self.tx_hash,
+            "source": self.source,
         }
 
 
@@ -143,16 +146,21 @@ def parse_ws_trade(msg: dict) -> Trade | None:
         return None
 
     try:
-        ts_raw = data["timestamp"]
-        # Polymarket sends epoch seconds as a string
-        ts = datetime.fromtimestamp(int(ts_raw), tz=UTC)
+        ts_raw = data.get("timestamp")
+        if ts_raw is not None:
+            ts = datetime.fromtimestamp(int(ts_raw), tz=UTC)
+        else:
+            ts = datetime.now(UTC)
+
+        # trade_id: prefer "id", fall back to "trade_id", then generate
+        trade_id = str(data.get("id") or data.get("trade_id") or f"ws-{ts.timestamp():.0f}-{data.get('asset_id', '')[:8]}")
 
         return Trade(
-            trade_id=str(data["id"]),
+            trade_id=trade_id,
             market_id=str(data["market"]),
             asset_id=str(data["asset_id"]),
-            wallet=str(data.get("taker_address", "")),
-            side=str(data["side"]).upper(),
+            wallet=str(data.get("taker_address", data.get("owner", ""))),
+            side=str(data.get("side", "BUY")).upper(),
             price=Decimal(str(data["price"])),
             size_usd=Decimal(str(data["size"])),
             timestamp=ts,
@@ -238,3 +246,64 @@ def parse_rest_trade(raw: dict, market_id: str = "") -> Trade | None:
         )
     except (KeyError, ValueError, TypeError, InvalidOperation):
         return None
+
+
+def parse_data_api_trade(raw: dict) -> Trade | None:
+    """Parse a trade from the Polymarket ``data-api`` ``/trades`` endpoint.
+
+    Expected shape (flat JSON object)::
+
+        {
+          "proxyWallet": "0x...",
+          "side": "BUY",
+          "asset": "token_id_string",
+          "conditionId": "0x...",
+          "size": 5.43,
+          "price": 0.92,
+          "timestamp": 1710000000,
+          "transactionHash": "0x...",
+          "outcome": "Yes",
+          "outcomeIndex": 0,
+          "title": "...",
+          "slug": "...",
+          "name": "trader_name",
+          "pseudonym": "..."
+        }
+
+    Returns ``None`` when the input is malformed or missing required fields.
+    """
+    try:
+        tx_hash = raw.get("transactionHash")
+        condition_id = str(raw.get("conditionId", ""))
+        wallet = str(raw.get("proxyWallet", ""))
+
+        if not condition_id or not wallet:
+            return None
+
+        ts_raw = raw.get("timestamp")
+        if ts_raw is not None:
+            ts = datetime.fromtimestamp(int(ts_raw), tz=UTC)
+        else:
+            ts = datetime.now(UTC)
+
+        asset_id = str(raw.get("asset", ""))
+        trade_id = str(tx_hash) if tx_hash else f"da-{ts.timestamp():.0f}-{asset_id[:8]}"
+
+        return Trade(
+            trade_id=trade_id,
+            market_id=condition_id,
+            asset_id=asset_id,
+            wallet=wallet,
+            side=str(raw.get("side", "BUY")).upper(),
+            price=Decimal(str(raw["price"])),
+            size_usd=Decimal(str(raw["size"])),
+            timestamp=ts,
+            tx_hash=str(tx_hash) if tx_hash else None,
+            source="rest",
+        )
+    except (KeyError, ValueError, TypeError, InvalidOperation):
+        return None
+
+
+# Backward-compatible alias
+parse_live_activity_event = parse_data_api_trade

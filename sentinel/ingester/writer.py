@@ -23,8 +23,8 @@ logger = structlog.get_logger()
 # SQL for batch insert — duplicate trade_ids are silently skipped.
 _INSERT_SQL = """
 INSERT OR IGNORE INTO trades
-    (trade_id, market_id, asset_id, wallet, side, price, size_usd, timestamp, tx_hash)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    (trade_id, market_id, asset_id, wallet, side, price, size_usd, timestamp, tx_hash, source)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 """
 
 
@@ -126,7 +126,7 @@ class BatchWriter:
         self._conn.executemany(_INSERT_SQL, rows)
         elapsed_ms = (time.perf_counter() - t0) * 1000
         self._total_written += len(batch)
-        logger.info(
+        logger.debug(
             "Batch written",
             size=len(batch),
             total=self._total_written,

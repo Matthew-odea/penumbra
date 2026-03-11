@@ -203,3 +203,70 @@ async def overview() -> dict:
         "score_distribution": score_distribution,
         "top_markets": top_markets,
     }
+
+
+@router.get("/metrics/ingestion")
+async def ingestion() -> dict:
+    """Ingestion source breakdown — book events + REST trades.
+
+    Note: The WS channel only delivers order-book events (price_changes),
+    not trade executions.  All trade data comes from REST polling the
+    Polymarket data-api ``/trades`` endpoint.
+
+    Returns:
+    - sources: per-source trade counts for today and all-time
+    - hourly: last 24h per-source trade counts bucketed by hour
+    - totals: aggregate counts across all sources
+    """
+    db = get_db()
+
+    # ── Trade counts (today + all-time) ─────────────────────────────
+    totals_row = db.execute("""
+        SELECT
+            COUNT(*) AS total,
+            COUNT(*) FILTER (WHERE timestamp >= CURRENT_DATE) AS today
+        FROM trades
+    """).fetchone()
+
+    total_all = totals_row[0] if totals_row else 0
+    total_today = totals_row[1] if totals_row else 0
+
+    # ── Hourly breakdown (last 24h) ─────────────────────────────────
+    hourly_rows = db.execute("""
+        SELECT
+            date_trunc('hour', timestamp) AS hour_bucket,
+            COUNT(*) AS cnt
+        FROM trades
+        WHERE timestamp >= CURRENT_TIMESTAMP - INTERVAL '24 hours'
+        GROUP BY 1
+        ORDER BY 1
+    """).fetchall()
+
+    hourly: list[dict] = []
+    for r in hourly_rows:
+        hourly.append({
+            "bucket": r[0].isoformat(),
+            "trades": r[1],
+        })
+
+    # ── Latest trade + active counts ────────────────────────────────
+    latest_row = db.execute("""
+        SELECT
+            MAX(timestamp) AS latest_rest,
+            COUNT(DISTINCT market_id) FILTER (WHERE timestamp >= CURRENT_DATE) AS markets_today,
+            COUNT(DISTINCT wallet) FILTER (WHERE timestamp >= CURRENT_DATE) AS wallets_today
+        FROM trades
+    """).fetchone()
+
+    return {
+        "totals": {
+            "all_time": total_all,
+            "today": total_today,
+        },
+        "latest": {
+            "rest": latest_row[0].isoformat() if latest_row[0] else None,
+        },
+        "markets_active_today": latest_row[1] or 0,
+        "wallets_active_today": latest_row[2] or 0,
+        "hourly": hourly,
+    }

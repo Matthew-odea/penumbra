@@ -18,6 +18,7 @@ from sentinel.db.init import SCHEMA_SQL
 def test_db():
     """In-memory DuckDB with schema applied and test data seeded."""
     conn = duckdb.connect(":memory:")
+    conn.execute("SET TimeZone = 'UTC'")
     conn.execute(SCHEMA_SQL)
     _seed(conn)
     return conn
@@ -62,14 +63,14 @@ def _seed(conn: duckdb.DuckDBPyConnection) -> None:
             now,
         ))
     conn.executemany(
-        "INSERT INTO trades VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO trades VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'ws', ?)",
         trades,
     )
 
     # Also add 5 resolved-market trades for wallet performance view
     for i in range(6):
         conn.execute(
-            "INSERT INTO trades VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO trades VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'ws', ?)",
             [
                 f"trade-res-{i:03d}", "mkt-003", "asset-res",
                 "0xAlpha", "BUY", Decimal("0.70"),

@@ -63,7 +63,7 @@ def _full_db() -> duckdb.DuckDBPyConnection:
         mid = "mkt-btc" if i < 10 else "mkt-fed"
         wallet = ["0xAlpha", "0xBravo", "0xCharlie"][i % 3]
         conn.execute(
-            "INSERT INTO trades VALUES (?,?,?,?,?,?,?,?,?,?)",
+            "INSERT INTO trades VALUES (?,?,?,?,?,?,?,?,?,'ws',?)",
             [f"trade-{i:03d}", mid, f"asset-{i % 3}", wallet,
              "BUY" if i % 2 == 0 else "SELL",
              Decimal("0.65") + Decimal("0.01") * i,
@@ -74,7 +74,7 @@ def _full_db() -> duckdb.DuckDBPyConnection:
 
     for i in range(6):
         conn.execute(
-            "INSERT INTO trades VALUES (?,?,?,?,?,?,?,?,?,?)",
+            "INSERT INTO trades VALUES (?,?,?,?,?,?,?,?,?,'ws',?)",
             [f"trade-res-{i}", "mkt-resolved", "asset-res", "0xAlpha",
              "BUY", Decimal("0.70"), Decimal("2000"),
              now - timedelta(days=5, hours=i), f"0xresolved{i}", now],

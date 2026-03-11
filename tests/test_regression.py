@@ -121,7 +121,7 @@ class TestSchemaRegression:
         }
         expected = {
             "trade_id", "market_id", "asset_id", "wallet", "side",
-            "price", "size_usd", "timestamp", "tx_hash", "ingested_at",
+            "price", "size_usd", "timestamp", "tx_hash", "source", "ingested_at",
         }
         assert expected.issubset(cols), f"Missing columns: {expected - cols}"
 
@@ -454,7 +454,7 @@ class TestViewRegression:
         # Insert 10 trades spread across hours
         for i in range(10):
             conn.execute(
-                "INSERT INTO trades VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, ?)",
+                "INSERT INTO trades VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, 'ws', ?)",
                 [f"vt-{i}", "mkt-v1", "asset-v1", "0xViewWallet", "BUY",
                  0.6, 1000.0 + i * 100, now - timedelta(hours=i), now],
             )
@@ -487,7 +487,7 @@ class TestViewRegression:
         )
         for i in range(3):  # Only 3 trades — below threshold
             conn.execute(
-                "INSERT INTO trades VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, ?)",
+                "INSERT INTO trades VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, 'ws', ?)",
                 [f"few-{i}", "mkt-few", "a1", "0xFewTrader", "BUY",
                  0.5, 500.0, now - timedelta(hours=i), now],
             )

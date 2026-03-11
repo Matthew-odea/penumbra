@@ -191,27 +191,31 @@ class Listener:
         trade = parse_ws_trade(msg)
         if trade is not None:
             self._trade_count += 1
-            if self._trade_count % 500 == 0:
-                logger.info("Trade milestone", count=self._trade_count)
             await self._on_trade(trade)
             return
 
-        # ── 2. Price changes (order book updates) ──────────────────────
+        # ── 2. Price changes (order book updates) ────────────────────
         if "price_changes" in msg:
             events = parse_price_changes(msg)
             for evt in events:
                 self._book_event_count += 1
                 if self._on_book_event is not None:
                     await self._on_book_event(evt)
-            if self._book_event_count % 500 == 0 and self._book_event_count > 0:
-                logger.info("Book-event milestone", count=self._book_event_count)
             return
 
         # ── 3. Book snapshot (bids/asks) — log only ────────────────────
         if "bids" in msg or "asks" in msg:
-            asset = msg.get("asset_id", "?")[:20]
-            logger.debug("Book snapshot received", asset=asset)
             return
 
-        # ── 4. Unknown ─────────────────────────────────────────────────
-        logger.debug("Unhandled WS message", keys=list(msg.keys())[:5])
+        # ── 4. Order placement/update (fee_rate_bps present) — skip ────
+        # These are order-level notifications, not trade executions.
+        # Shape: {market, asset_id, price, size, fee_rate_bps, ...}
+        if "fee_rate_bps" in msg:
+            return
+
+        # ── 5. Unknown ─────────────────────────────────────────────────
+        self._unknown_count = getattr(self, "_unknown_count", 0) + 1
+        if self._unknown_count <= 10:
+            logger.warning("Unhandled WS message (sample)", payload=msg)
+        elif self._unknown_count % 500 == 0:
+            logger.debug("Unhandled WS message", keys=list(msg.keys())[:5], total_unknown=self._unknown_count)

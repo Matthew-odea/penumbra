@@ -1,5 +1,5 @@
 # =============================================================================
-# Penumbra — Docker Compose (Local Development)
+# Penumbra — Docker Compose
 # =============================================================================
 # Usage:
 #   docker compose up -d          # Start all services
@@ -8,20 +8,22 @@
 # =============================================================================
 
 services:
-  # ── Penumbra (Pipeline + API in one process) ─────────────────────────────
+  # ── Penumbra (Pipeline + API + Dashboard in one container) ───────────────
   sentinel:
     build:
       context: .
       dockerfile: Dockerfile
     env_file: .env
     ports:
-      - "8000:8000"
+      - "${API_PORT:-8000}:8000"
     volumes:
-      - ./data:/app/data          # DuckDB file persistence
-      - ./sentinel:/app/sentinel  # Hot-reload source code (dev only)
+      - penumbra-data:/app/data   # DuckDB persistence
     restart: unless-stopped
-    # Runs: Ingester → Scanner → Judge + FastAPI on :8000
-    command: python -m sentinel --with-api
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
 
 volumes:
-  data:
+  penumbra-data:

@@ -22,6 +22,7 @@ class Settings(BaseSettings):
     # ── Polymarket ──────────────────────────────────────────────────────────
     polymarket_ws_url: str = "wss://ws-subscriptions-clob.polymarket.com/ws/market"
     polymarket_rest_url: str = "https://clob.polymarket.com"
+    polymarket_data_api_url: str = "https://data-api.polymarket.com"
     # TODO: Replace with real Polymarket tags once live-tested.
     #       Run `python -m sentinel.ingester --dry-run --timeout 30` and check
     #       the actual tag values returned by the /markets endpoint.
@@ -76,8 +77,8 @@ class Settings(BaseSettings):
     alert_min_score: int = 80
 
     # ── Scanner Thresholds ──────────────────────────────────────────────────
-    zscore_threshold: float = 3.5
-    min_trade_size_usd: float = 500.0
+    zscore_threshold: float = 2.0
+    min_trade_size_usd: float = 100.0
     signal_min_score: int = 30
     wallet_min_trades: int = 5
     wallet_whitelist_win_rate: float = 0.65
@@ -93,6 +94,10 @@ class Settings(BaseSettings):
     ingester_batch_size: int = 100
     ingester_flush_interval_seconds: int = 5
     market_sync_interval_hours: int = 6
+    trade_poll_interval_seconds: int = 30
+    trade_poll_max_markets: int = 20
+    trade_poll_cold_batch: int = 50
+    trade_poll_cold_interval_seconds: int = 60
 
     # ── FastAPI ─────────────────────────────────────────────────────────────
     api_host: str = "0.0.0.0"

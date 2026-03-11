@@ -45,6 +45,7 @@ CREATE TABLE IF NOT EXISTS trades (
     size_usd        DECIMAL(18, 6),
     timestamp       TIMESTAMP NOT NULL,
     tx_hash         VARCHAR,
+    source          VARCHAR DEFAULT 'ws',   -- 'ws' or 'rest'
     ingested_at     TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -204,6 +205,19 @@ def init_schema(db_path: Path | None = None) -> duckdb.DuckDBPyConnection:
     logger.info("Initializing DuckDB schema", path=str(db_path))
     conn = duckdb.connect(str(db_path))
     conn.execute(SCHEMA_SQL)
+
+    # ── Migrations (idempotent) ─────────────────────────────────────────
+    # v002: add source column to trades (ws vs rest)
+    cols = {
+        r[0]
+        for r in conn.execute(
+            "SELECT column_name FROM information_schema.columns WHERE table_name='trades'"
+        ).fetchall()
+    }
+    if "source" not in cols:
+        conn.execute("ALTER TABLE trades ADD COLUMN source VARCHAR DEFAULT 'ws'")
+        logger.info("Migration: added 'source' column to trades table")
+
     logger.info("Schema initialized successfully")
 
     # Log table counts for verification

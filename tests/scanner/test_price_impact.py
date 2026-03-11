@@ -42,6 +42,7 @@ def _init_db() -> duckdb.DuckDBPyConnection:
             size_usd DECIMAL(18,6),
             timestamp TIMESTAMP NOT NULL,
             tx_hash VARCHAR,
+            source VARCHAR DEFAULT 'ws',
             ingested_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     """)
@@ -61,7 +62,7 @@ def _seed(conn: duckdb.DuckDBPyConnection) -> None:
         ("t3", "mkt-1", "a1", "0xwalletC", "BUY", 0.70, 5000.0, now - timedelta(minutes=1)),
     ]
     conn.executemany(
-        "INSERT INTO trades VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, CURRENT_TIMESTAMP)",
+        "INSERT INTO trades VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, 'ws', CURRENT_TIMESTAMP)",
         trades,
     )
 

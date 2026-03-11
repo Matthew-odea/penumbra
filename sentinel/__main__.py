@@ -47,7 +47,8 @@ async def _run_all(
             app,
             host=settings.api_host,
             port=settings.api_port,
-            log_level="info",
+            log_level="warning",
+            access_log=False,
         )
         server = uvicorn.Server(config)
         tasks.append(

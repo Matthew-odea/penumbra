@@ -12,6 +12,7 @@ import type {
   HealthStatus,
   TimeseriesPoint,
   MetricsOverview,
+  IngestionMetrics,
 } from './types'
 
 const BASE = '/api'
@@ -117,4 +118,8 @@ export function fetchTimeseries(
 
 export function fetchMetricsOverview(): Promise<MetricsOverview> {
   return get<MetricsOverview>(`${BASE}/metrics/overview`)
+}
+
+export function fetchIngestion(): Promise<IngestionMetrics> {
+  return get<IngestionMetrics>(`${BASE}/metrics/ingestion`)
 }

@@ -42,6 +42,7 @@ def _init_db() -> duckdb.DuckDBPyConnection:
             size_usd DECIMAL(18,6),
             timestamp TIMESTAMP NOT NULL,
             tx_hash VARCHAR,
+            source VARCHAR DEFAULT 'ws',
             ingested_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     """)
@@ -83,7 +84,7 @@ def _seed_resolved_market(conn: duckdb.DuckDBPyConnection, market_id: str, resol
 
 def _seed_trade(conn: duckdb.DuckDBPyConnection, trade_id: str, market_id: str, wallet: str, side: str = "BUY"):
     conn.execute(
-        "INSERT INTO trades VALUES (?, ?, 'a1', ?, ?, 0.5, 100.0, CURRENT_TIMESTAMP, NULL, CURRENT_TIMESTAMP)",
+        "INSERT INTO trades VALUES (?, ?, 'a1', ?, ?, 0.5, 100.0, CURRENT_TIMESTAMP, NULL, 'ws', CURRENT_TIMESTAMP)",
         [trade_id, market_id, wallet, side],
     )
 

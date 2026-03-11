@@ -62,13 +62,16 @@ async def fetch_all_markets(
                 if not m.get("active") or m.get("closed") or m.get("archived"):
                     continue
                 # Category filter — Polymarket uses "tags" list
-                tags = [t.lower() for t in m.get("tags", [])]
+                raw_tags = m.get("tags") or []
+                tags = [t.lower() for t in raw_tags if isinstance(t, str)]
                 if cats and not any(t in cats for t in tags):
                     continue
                 markets.append(m)
 
             cursor = body.get("next_cursor")
-            logger.debug("Fetched market page", page=page, cursor=cursor, found=len(markets))
+            # Log progress every 100 pages instead of every page
+            if page % 100 == 0:
+                logger.info("Market sync progress", page=page, found=len(markets))
 
     logger.info("Market fetch complete", total=len(markets), pages=page)
     return markets
@@ -96,13 +99,13 @@ def upsert_markets(conn: Any, markets: list[dict[str, Any]]) -> int:
 
     rows = []
     for m in markets:
-        tokens = m.get("tokens", [])
+        tokens = m.get("tokens") or []
         volume = sum(float(t.get("price", 0)) for t in tokens) if tokens else 0.0
         rows.append((
             str(m["condition_id"]),
             m.get("question", ""),
             m.get("market_slug", m.get("slug", "")),
-            ",".join(m.get("tags", [])),
+            ",".join(t for t in (m.get("tags") or []) if isinstance(t, str)),
             _parse_end_date(m.get("end_date_iso")),
             float(m.get("volume", 0) or 0),
             float(m.get("liquidity", 0) or 0),
@@ -151,8 +154,32 @@ async def fetch_active_asset_ids(
     Returns:
         A flat list of asset_id strings (token IDs).
     """
-    url = base_url or settings.polymarket_rest_url
+    active = await fetch_active_markets(base_url=base_url, limit=limit)
     asset_ids: list[str] = []
+    for _cid, aids in active:
+        asset_ids.extend(aids)
+    return asset_ids
+
+
+async def fetch_active_markets(
+    *,
+    base_url: str | None = None,
+    limit: int = 20,
+) -> list[tuple[str, list[str]]]:
+    """Fetch actively-traded markets with their condition_ids and token IDs.
+
+    Uses the ``/sampling-markets`` endpoint which returns the top markets
+    by recent activity.
+
+    Args:
+        base_url: Override for the REST URL.
+        limit: Max number of markets to pull.
+
+    Returns:
+        A list of ``(condition_id, [asset_id, ...])`` tuples.
+    """
+    url = base_url or settings.polymarket_rest_url
+    result: list[tuple[str, list[str]]] = []
 
     async with httpx.AsyncClient(verify=False, timeout=30) as client:
         resp = await client.get(f"{url}/sampling-markets", params={"limit": limit})
@@ -171,10 +198,32 @@ async def fetch_active_asset_ids(
     for market in markets:
         if not isinstance(market, dict):
             continue
+        condition_id = market.get("condition_id", "")
+        if not condition_id:
+            continue
+        token_ids: list[str] = []
         for token in market.get("tokens", []):
             tid = token.get("token_id", "")
             if tid:
-                asset_ids.append(tid)
+                token_ids.append(tid)
+        if token_ids:
+            result.append((condition_id, token_ids))
+        # Enforce client-side limit (API may ignore the query param)
+        if len(result) >= limit:
+            break
 
-    logger.info("Fetched active asset IDs", markets=len(markets), assets=len(asset_ids))
-    return asset_ids
+    logger.info(
+        "Fetched active markets",
+        markets=len(result),
+        assets=sum(len(aids) for _, aids in result),
+    )
+    return result
+
+
+def get_all_condition_ids(conn: Any) -> list[str]:
+    """Return all active market condition_ids from the local DB."""
+    rows = conn.execute(
+        "SELECT market_id FROM markets WHERE active = true ORDER BY market_id"
+    ).fetchall()
+    return [r[0] for r in rows]
+    return result

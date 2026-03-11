@@ -5,6 +5,8 @@ import {
   Line,
   BarChart,
   Bar,
+  AreaChart,
+  Area,
   Cell,
   XAxis,
   YAxis,
@@ -13,7 +15,7 @@ import {
   CartesianGrid,
   Legend,
 } from 'recharts'
-import { useTimeseries, useMetricsOverview, useBudget } from '../hooks/queries'
+import { useTimeseries, useMetricsOverview, useBudget, useIngestion } from '../hooks/queries'
 import { fmtNum } from '../lib/format'
 
 const RANGE_OPTIONS = [
@@ -30,6 +32,7 @@ export default function Metrics() {
   const { data: timeseries = [], isLoading: tsLoading } = useTimeseries(range.hours, range.bucket)
   const { data: overview } = useMetricsOverview()
   const { data: budget } = useBudget()
+  const { data: ingestion } = useIngestion()
   const navigate = useNavigate()
 
   // Format time labels for chart
@@ -156,6 +159,89 @@ export default function Metrics() {
           </div>
         )}
       </div>
+
+      {/* ── Row 1b: Ingestion Source Breakdown ────────────────────── */}
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+        {/* Source stat cards */}
+        <IngestionCard
+          label="Trades (Today)"
+          value={ingestion?.totals?.today}
+          sub={ingestion?.totals ? `${fmtNum(ingestion.totals.all_time)} all-time` : undefined}
+          accent
+        />
+        <IngestionCard
+          label="Active Markets"
+          value={ingestion?.markets_active_today}
+          sub={(() => {
+            const rest = ingestion?.latest?.rest
+            if (!rest) return undefined
+            return `Last trade ${new Date(rest).toLocaleTimeString('en-US', {
+              hour: 'numeric', minute: '2-digit', hour12: true,
+            })}`
+          })()}
+        />
+        <IngestionCard
+          label="Unique Wallets (Today)"
+          value={ingestion?.wallets_active_today}
+          sub={null}
+        />
+      </div>
+
+      {/* Ingestion source area chart (24h) */}
+      {(ingestion?.hourly?.length ?? 0) > 0 && (
+        <div className="bg-surface-1 border border-border-subtle rounded-sm p-4">
+          <div className="text-[11px] uppercase tracking-wider text-neutral-500 mb-3">
+            Trades Ingested (24h)
+          </div>
+          <div className="h-40">
+            <ResponsiveContainer width="100%" height="100%">
+              <AreaChart
+                data={(ingestion?.hourly ?? []).map((p) => ({
+                  ...p,
+                  label: new Date(p.bucket).toLocaleTimeString('en-US', {
+                    hour: 'numeric',
+                    minute: '2-digit',
+                    hour12: true,
+                  }),
+                }))}
+                margin={{ top: 4, right: 16, bottom: 0, left: 0 }}
+              >
+                <CartesianGrid strokeDasharray="3 3" stroke="#1e1e1e" vertical={false} />
+                <XAxis
+                  dataKey="label"
+                  tick={{ fill: '#525252', fontSize: 10 }}
+                  axisLine={{ stroke: '#1e1e1e' }}
+                  tickLine={false}
+                  interval="preserveStartEnd"
+                />
+                <YAxis
+                  tick={{ fill: '#525252', fontSize: 10 }}
+                  axisLine={false}
+                  tickLine={false}
+                  allowDecimals={false}
+                />
+                <Tooltip
+                  contentStyle={{
+                    background: '#191919',
+                    border: '1px solid #2a2a2a',
+                    borderRadius: '3px',
+                    fontSize: '11px',
+                    color: '#d4d4d4',
+                  }}
+                  labelStyle={{ color: '#737373' }}
+                />
+                <Area
+                  type="monotone"
+                  dataKey="trades"
+                  stroke="#3b82f6"
+                  fill="#1e3a5f"
+                  name="Trades"
+                />
+              </AreaChart>
+            </ResponsiveContainer>
+          </div>
+        </div>
+      )}
 
       {/* ── Row 2: Funnel + Score Distribution + Classification ─── */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
@@ -374,6 +460,37 @@ function FunnelRow({
           style={{ width: `${barWidth}%` }}
         />
       </div>
+    </div>
+  )
+}
+
+/* ── Ingestion Card Component ────────────────────────────────────── */
+function IngestionCard({
+  label,
+  value,
+  sub,
+  accent,
+}: {
+  label: string
+  value: number | undefined
+  sub?: string
+  accent?: boolean
+}) {
+  return (
+    <div className="bg-surface-1 border border-border-subtle rounded-sm px-4 py-3">
+      <div className="text-[11px] uppercase tracking-wider text-neutral-500 mb-1">
+        {label}
+      </div>
+      <div
+        className={`font-mono text-lg font-medium ${
+          accent ? 'text-blue-400' : 'text-neutral-100'
+        }`}
+      >
+        {fmtNum(value)}
+      </div>
+      {sub && (
+        <div className="text-[11px] text-neutral-600 mt-0.5">{sub}</div>
+      )}
     </div>
   )
 }

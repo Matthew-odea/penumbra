@@ -24,8 +24,9 @@ import structlog
 from sentinel.config import settings
 from sentinel.db.init import init_schema
 from sentinel.ingester.listener import Listener
-from sentinel.ingester.markets import sync_markets, fetch_active_asset_ids
+from sentinel.ingester.markets import sync_markets, fetch_active_asset_ids, fetch_active_markets, get_all_condition_ids
 from sentinel.ingester.models import BookEvent, Trade
+from sentinel.ingester.poller import TradePoller
 from sentinel.ingester.writer import BatchWriter
 from sentinel.judge.pipeline import Judge
 from sentinel.judge.store import Alert
@@ -36,14 +37,56 @@ logger = structlog.get_logger()
 
 
 async def _periodic_market_sync(conn: object, interval_hours: int) -> None:
-    """Re-sync market metadata on a timer."""
+    """Re-sync market metadata on a timer (sleeps first to avoid duplicating initial sync)."""
     while True:
+        await asyncio.sleep(interval_hours * 3600)
         try:
             count = await sync_markets(conn)
             logger.info("Periodic market sync complete", count=count)
         except Exception as exc:
             logger.error("Market sync failed", error=str(exc))
-        await asyncio.sleep(interval_hours * 3600)
+
+
+async def _periodic_status(
+    writer: "BatchWriter",
+    listener: "Listener",
+    poller: "TradePoller",
+    scanner: "Scanner | None",
+    judge: "Judge | None",
+    interval: int = 30,
+) -> None:
+    """Print a single aggregate status line every *interval* seconds."""
+    prev_trades = 0
+    prev_book = 0
+    prev_polled = 0
+    while True:
+        await asyncio.sleep(interval)
+        ws_t = listener.trade_count
+        ws_b = listener.book_event_count
+        rest_t = poller.trade_count
+        d_ws = ws_t - prev_trades
+        d_book = ws_b - prev_book
+        d_rest = rest_t - prev_polled
+        prev_trades, prev_book, prev_polled = ws_t, ws_b, rest_t
+
+        parts: dict[str, object] = {
+            "ws_trades": ws_t,
+            "book_events": ws_b,
+            "rest_trades": rest_t,
+            "rest_cold": poller.cold_trade_count,
+            "db_written": writer.total_written,
+        }
+        if d_ws or d_book or d_rest:
+            parts["Δws"] = d_ws
+            parts["Δbook"] = d_book
+            parts["Δrest"] = d_rest
+        if scanner is not None:
+            parts["scanned"] = scanner.trades_scanned
+            parts["signals"] = scanner.signals_emitted
+        if judge is not None:
+            parts["judged"] = judge.signals_processed
+            parts["alerts"] = judge.alerts_emitted
+        logger.info("status", **parts)
 
 
 async def run_ingester(
@@ -79,20 +122,35 @@ async def run_ingester(
         if scanner_queue is not None:
             await scanner_queue.put([evt])
 
-    # ── Resolve asset IDs ───────────────────────────────────────────────
+    # ── Resolve asset IDs + condition IDs ────────────────────────────────
+    condition_ids: list[str] = []
     if not asset_ids:
         logger.info("No asset IDs provided — fetching active markets...")
         try:
-            asset_ids = await fetch_active_asset_ids(limit=20)
-            logger.info("Auto-discovered active assets", count=len(asset_ids))
+            active_markets = await fetch_active_markets(
+                limit=settings.trade_poll_max_markets,
+            )
+            condition_ids = [cid for cid, _ in active_markets]
+            asset_ids = [aid for _, aids in active_markets for aid in aids]
+            logger.info(
+                "Auto-discovered active markets",
+                markets=len(condition_ids),
+                assets=len(asset_ids),
+            )
         except Exception as exc:
-            logger.error("Failed to fetch active assets", error=str(exc))
+            logger.error("Failed to fetch active markets", error=str(exc))
             asset_ids = []
 
     listener = Listener(
         on_trade=writer.add,
         on_book_event=_on_book_event,
         asset_ids=asset_ids,
+        dry_run=dry_run,
+    )
+
+    poller = TradePoller(
+        on_trade=writer.add,
+        condition_ids=condition_ids,
         dry_run=dry_run,
     )
 
@@ -106,6 +164,13 @@ async def run_ingester(
             logger.info("Initial market sync complete", count=count)
         except Exception as exc:
             logger.warning("Initial market sync failed (continuing)", error=str(exc))
+
+        # Load all DB markets for cold-tier rotation
+        try:
+            all_ids = get_all_condition_ids(conn)
+            poller.update_cold_markets(all_ids)
+        except Exception as exc:
+            logger.warning("Failed to load cold-tier markets", error=str(exc))
 
         # Periodic re-sync
         tasks.append(
@@ -125,7 +190,13 @@ async def run_ingester(
         asyncio.create_task(listener.run(), name="ws_listener")
     )
 
-    # 4. Scanner — consumes from scanner_queue, emits to judge_queue
+    # 4. REST trade poller — hot + cold tiers
+    if condition_ids or poller._cold_ids:
+        tasks.append(
+            asyncio.create_task(poller.run(), name="trade_poller")
+        )
+
+    # 5. Scanner — consumes from scanner_queue, emits to judge_queue
     scanner = None
     if not dry_run and conn is not None:
         scanner = Scanner(
@@ -138,7 +209,7 @@ async def run_ingester(
             asyncio.create_task(scanner.run(), name="scanner")
         )
 
-    # 5. Judge — consumes from judge_queue, emits to alert_queue
+    # 6. Judge — consumes from judge_queue, emits to alert_queue
     judge = None
     if not dry_run and conn is not None:
         judge = Judge(
@@ -150,6 +221,14 @@ async def run_ingester(
         tasks.append(
             asyncio.create_task(judge.run(), name="judge")
         )
+
+    # 7. Periodic aggregate status line (every 30 s)
+    tasks.append(
+        asyncio.create_task(
+            _periodic_status(writer, listener, poller, scanner, judge),
+            name="status",
+        )
+    )
 
     mode = "DRY RUN" if dry_run else "LIVE"
     logger.info(
@@ -170,6 +249,7 @@ async def run_ingester(
         pass
     finally:
         listener.stop()
+        poller.stop()
         if scanner is not None:
             scanner.stop()
         if judge is not None:
@@ -181,8 +261,11 @@ async def run_ingester(
         logger.info(
             "Ingester stopped",
             total_trades=writer.total_written,
-            ws_trades=listener.trade_count,
             ws_book_events=listener.book_event_count,
+            polled_trades=poller.trade_count,
+            poll_cycles=poller.poll_count,
+            cold_trades=poller.cold_trade_count,
+            cold_cycles=poller.cold_poll_count,
             scanner_trades=scanner.trades_scanned if scanner else 0,
             scanner_signals=scanner.signals_emitted if scanner else 0,
             judge_processed=judge.signals_processed if judge else 0,

@@ -1,3 +1,12 @@
+# ── Stage 1: Build dashboard ─────────────────────────────────────────────────
+FROM node:20-slim AS dashboard-build
+WORKDIR /app/dashboard
+COPY dashboard/package.json dashboard/package-lock.json* ./
+RUN npm ci --ignore-scripts
+COPY dashboard/ .
+RUN npm run build
+
+# ── Stage 2: Python runtime ─────────────────────────────────────────────────
 FROM python:3.11-slim
 
 WORKDIR /app
@@ -14,6 +23,9 @@ RUN pip install --no-cache-dir -e .
 # Copy source
 COPY sentinel/ sentinel/
 COPY scripts/ scripts/
+
+# Copy built dashboard
+COPY --from=dashboard-build /app/dashboard/dist dashboard/dist
 
 # Create data directory
 RUN mkdir -p data

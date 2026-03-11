@@ -145,3 +145,17 @@ export interface TopMarket {
   max_score: number | null
   avg_score: number | null
 }
+
+export interface IngestionMetrics {
+  sources: Record<string, { total: number; today: number }>
+  totals: { all_time: number; today: number }
+  latest: { ws: string | null; rest: string | null }
+  markets_active_today: number
+  hourly: IngestionHourly[]
+}
+
+export interface IngestionHourly {
+  bucket: string
+  ws: number
+  rest: number
+}

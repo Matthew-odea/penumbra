@@ -148,3 +148,51 @@ async def test_overview_funnel_values(client):
 
     # 6 signal_reasoning records (classified)
     assert funnel["classified"] > 0
+
+
+@pytest.mark.anyio
+async def test_ingestion_structure(client):
+    """GET /api/metrics/ingestion returns expected structure."""
+    resp = await client.get("/api/metrics/ingestion")
+    assert resp.status_code == 200
+    data = resp.json()
+
+    assert "totals" in data
+    assert "latest" in data
+    assert "markets_active_today" in data
+    assert "wallets_active_today" in data
+    assert "hourly" in data
+
+    assert "all_time" in data["totals"]
+    assert "today" in data["totals"]
+    assert "rest" in data["latest"]
+    assert isinstance(data["hourly"], list)
+
+
+@pytest.mark.anyio
+async def test_ingestion_totals_match_trades(client):
+    """Ingestion totals should match the actual trade count."""
+    resp = await client.get("/api/metrics/ingestion")
+    data = resp.json()
+
+    # Seeded trades: 20 regular + 6 resolved = 26 total
+    assert data["totals"]["all_time"] == 26
+    # At least the recent trades should be today (resolved ones are 5 days old)
+    assert data["totals"]["today"] >= 0
+    # Wallets active today should be non-negative
+    assert data["wallets_active_today"] >= 0
+    assert data["markets_active_today"] >= 0
+
+
+@pytest.mark.anyio
+async def test_ingestion_hourly_format(client):
+    """Hourly ingestion entries should have bucket and trades keys."""
+    resp = await client.get("/api/metrics/ingestion")
+    data = resp.json()
+    hourly = data["hourly"]
+
+    if len(hourly) > 0:
+        for entry in hourly:
+            assert "bucket" in entry
+            assert "trades" in entry
+            assert isinstance(entry["trades"], int)

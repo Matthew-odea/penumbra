@@ -14,6 +14,7 @@ import {
   fetchHealth,
   fetchTimeseries,
   fetchMetricsOverview,
+  fetchIngestion,
 } from '../api/client'
 
 const POLL = 10_000 // 10s refresh
@@ -113,6 +114,14 @@ export function useMetricsOverview() {
   return useQuery({
     queryKey: ['metrics-overview'],
     queryFn: fetchMetricsOverview,
+    refetchInterval: POLL,
+  })
+}
+
+export function useIngestion() {
+  return useQuery({
+    queryKey: ['ingestion'],
+    queryFn: fetchIngestion,
     refetchInterval: POLL,
   })
 }
