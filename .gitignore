@@ -223,6 +223,7 @@ data/
 # Dashboard (Vite + React)
 dashboard/node_modules/
 dashboard/dist/
+!dashboard/src/lib/
 
 # IDE
 .idea/
