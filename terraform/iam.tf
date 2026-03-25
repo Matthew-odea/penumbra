@@ -32,7 +32,7 @@ resource "aws_iam_role_policy" "ec2_app" {
   policy = jsonencode({
     Version = "2012-10-17"
     Statement = [
-      # Pull images from ECR
+      # Pull images from ECR (DescribeRepositories + DescribeImages needed by deploy.sh)
       {
         Effect = "Allow"
         Action = [
@@ -40,6 +40,8 @@ resource "aws_iam_role_policy" "ec2_app" {
           "ecr:BatchCheckLayerAvailability",
           "ecr:GetDownloadUrlForLayer",
           "ecr:BatchGetImage",
+          "ecr:DescribeRepositories",
+          "ecr:DescribeImages",
         ]
         Resource = "*"
       },

@@ -12,10 +12,19 @@ DATA_DIR="/data"
 
 # ── 1. System packages ──────────────────────────────────────────────────────
 dnf update -y
-dnf install -y docker awscli2
+dnf install -y docker
+# aws-cli v2 is pre-installed on AL2023
 
 systemctl enable docker
 systemctl start docker
+
+# docker compose plugin (not in AL2023 repos — install binary directly)
+curl -fsSL https://github.com/docker/compose/releases/latest/download/docker-compose-linux-x86_64 \
+  -o /usr/local/bin/docker-compose
+chmod +x /usr/local/bin/docker-compose
+# Also wire up as docker compose subcommand
+mkdir -p /usr/local/lib/docker/cli-plugins
+ln -sf /usr/local/bin/docker-compose /usr/local/lib/docker/cli-plugins/docker-compose
 
 # ── 2. Mount EBS data volume ────────────────────────────────────────────────
 # Device may appear as /dev/xvdf or /dev/nvme1n1 depending on instance type
@@ -124,7 +133,11 @@ exec >> /var/log/penumbra-deploy.log 2>&1
 echo "=== Deploy triggered at $(date) ==="
 
 APP_DIR="/opt/penumbra"
-AWS_REGION=$(curl -s http://169.254.169.254/latest/meta-data/placement/region)
+# IMDSv2 token required on AL2023
+TOKEN=$(curl -s -X PUT "http://169.254.169.254/latest/api/token" \
+  -H "X-aws-ec2-metadata-token-ttl-seconds: 21600")
+AWS_REGION=$(curl -s -H "X-aws-ec2-metadata-token: $TOKEN" \
+  http://169.254.169.254/latest/meta-data/placement/region)
 ECR_REGISTRY=$(aws ecr describe-repositories \
   --repository-names penumbra \
   --region "$AWS_REGION" \
@@ -151,7 +164,10 @@ set -euo pipefail
 echo "Refreshing secrets from SSM Parameter Store..."
 
 APP_DIR="/opt/penumbra"
-AWS_REGION=$(curl -s http://169.254.169.254/latest/meta-data/placement/region)
+TOKEN=$(curl -s -X PUT "http://169.254.169.254/latest/api/token" \
+  -H "X-aws-ec2-metadata-token-ttl-seconds: 21600")
+AWS_REGION=$(curl -s -H "X-aws-ec2-metadata-token: $TOKEN" \
+  http://169.254.169.254/latest/meta-data/placement/region)
 
 fetch_param() {
   aws ssm get-parameter \
