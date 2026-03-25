@@ -110,7 +110,7 @@ class Settings(BaseSettings):
     trade_poll_max_markets: int = 50
     trade_poll_cold_batch: int = 50
     trade_poll_cold_interval_seconds: int = 60
-    trade_poll_limit: int = 500
+    trade_poll_limit: int = 1000
 
     # ── FastAPI ─────────────────────────────────────────────────────────────
     api_host: str = "0.0.0.0"

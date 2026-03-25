@@ -45,8 +45,10 @@ _SSL_CTX = ssl.create_default_context()
 _SSL_CTX.check_hostname = False
 _SSL_CTX.verify_mode = ssl.CERT_NONE
 
-# Bounded LRU seen-set to avoid reprocessing recent trades
-_SEEN_SET_MAX = 50_000
+# Bounded LRU seen-set to avoid reprocessing recent trades.
+# Sized to hold trade_poll_limit × (hot_markets + cold_batch) with headroom.
+# At 1000 limit × 100 markets = 100K; 200K gives 2× safety margin.
+_SEEN_SET_MAX = 200_000
 
 
 class _BoundedSet:
