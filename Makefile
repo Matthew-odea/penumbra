@@ -2,7 +2,7 @@
 # Penumbra — Makefile
 # =============================================================================
 
-.PHONY: help install dev setup-env test lint format check db-init run-ingester run-scanner run-judge run-api run-dashboard clean
+.PHONY: help install dev setup-env test lint format check db-init run-ingester run-scanner run-judge run-api run-dashboard clean logs logs-live ssm fix-wal
 
 PYTHON := python
 UV := uv
@@ -89,3 +89,31 @@ docker-up: ## Start local dev stack via Docker Compose
 
 docker-down: ## Stop local dev stack
 	docker compose down
+
+# ── AWS / Ops ──────────────────────────────────────────────────────────────────
+
+INSTANCE_ID ?= i-02e144e95fc0f30f9
+LOG_GROUP   ?= /penumbra/sentinel
+AWS_REGION  ?= us-east-1
+
+logs: ## Show last 100 log lines from CloudWatch
+	aws logs get-log-events \
+	  --log-group-name $(LOG_GROUP) --log-stream-name sentinel \
+	  --region $(AWS_REGION) --limit 100 \
+	  --query 'events[*].message' --output text
+
+logs-live: ## Tail live logs from CloudWatch (Ctrl-C to stop)
+	aws logs tail $(LOG_GROUP) --follow --region $(AWS_REGION)
+
+ssm: ## Open an interactive SSM shell on the EC2 instance
+	aws ssm start-session --target $(INSTANCE_ID) --region $(AWS_REGION)
+
+fix-wal: ## Fix DuckDB WAL corruption: stop container, delete WAL, restart
+	@echo "Stopping container, deleting WAL, restarting..."
+	aws ssm send-command \
+	  --instance-ids $(INSTANCE_ID) \
+	  --document-name "AWS-RunShellScript" \
+	  --region $(AWS_REGION) \
+	  --parameters 'commands=["cd /opt/penumbra && docker-compose down && rm -fv /data/penumbra/sentinel.duckdb.wal && docker-compose up -d && echo done"]' \
+	  --timeout-seconds 60 \
+	  --query "Command.CommandId" --output text
