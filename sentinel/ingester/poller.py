@@ -236,7 +236,7 @@ class TradePoller:
         sem = asyncio.Semaphore(10)
 
         async with httpx.AsyncClient(verify=False, timeout=15) as client:
-            async def _poll_one(cid: str) -> int:
+            async def _poll_one(cid: str) -> tuple[int, int]:
                 async with sem:
                     return await self._poll_market(cid, client)
 
@@ -245,35 +245,39 @@ class TradePoller:
                 return_exceptions=True,
             )
 
-        new_trades = sum(r for r in results if isinstance(r, int))
+        new_trades = sum(r[0] for r in results if isinstance(r, tuple))
+        total_fetched = sum(r[1] for r in results if isinstance(r, tuple))
         errors = sum(1 for r in results if isinstance(r, Exception))
+        dedup = total_fetched - new_trades
 
         if tier == "cold":
             self._cold_trade_count += new_trades
 
-        if new_trades > 0 or errors > 0:
-            logger.info(
-                "Poll cycle",
-                tier=tier,
-                new=new_trades,
-                errors=errors,
-                total=self._trade_count,
-                markets=len(condition_ids),
-            )
+        logger.info(
+            "poll_cycle",
+            tier=tier,
+            new=new_trades,
+            fetched=total_fetched,
+            dedup=dedup,
+            errors=errors if errors else None,
+            total=self._trade_count,
+            markets=len(condition_ids),
+        )
 
-    # keep _poll_all as alias for backward compatibility (tests)
+    # kept for backward compatibility (tests)
     async def _poll_all(self) -> None:
         await self._poll_batch(self._condition_ids, "hot")
 
     async def _poll_market(
         self, condition_id: str, client: httpx.AsyncClient
-    ) -> int:
+    ) -> tuple[int, int]:
         """Fetch and process trades for a single market from the data-api.
 
-        Returns the number of new trades ingested.
+        Returns (new_count, total_fetched) — total_fetched includes deduped trades.
         """
         url = f"{self._base_url}/trades"
         new_count = 0
+        total_fetched = 0
 
         try:
             resp = await client.get(
@@ -281,7 +285,7 @@ class TradePoller:
             )
 
             if resp.status_code == 404:
-                return 0
+                return 0, 0
 
             resp.raise_for_status()
             events = resp.json()
@@ -292,7 +296,7 @@ class TradePoller:
                     market=condition_id[:16],
                     type=type(events).__name__,
                 )
-                return 0
+                return 0, 0
 
             for raw_event in events:
                 if not isinstance(raw_event, dict):
@@ -302,6 +306,8 @@ class TradePoller:
                 if trade is None:
                     continue
 
+                total_fetched += 1
+
                 # Dedup: skip if we've already seen this trade
                 if trade.trade_id in self._seen:
                     continue
@@ -310,6 +316,15 @@ class TradePoller:
                 self._trade_count += 1
                 new_count += 1
                 await self._on_trade(trade)
+
+            if new_count > 0:
+                logger.debug(
+                    "market_polled",
+                    market=condition_id[:16],
+                    new=new_count,
+                    fetched=total_fetched,
+                    dedup=total_fetched - new_count,
+                )
 
         except httpx.HTTPStatusError as exc:
             logger.warning(
@@ -324,4 +339,4 @@ class TradePoller:
                 error=str(exc)[:120],
             )
 
-        return new_count
+        return new_count, total_fetched

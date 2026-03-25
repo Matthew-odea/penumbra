@@ -118,9 +118,10 @@ class TestTradePoller:
         mock_client.get.return_value = mock_response
 
         poller = TradePoller(on_trade=callback, condition_ids=["0xcond1"])
-        count = await poller._poll_market("0xcond1", mock_client)
+        new, fetched = await poller._poll_market("0xcond1", mock_client)
 
-        assert count == 2
+        assert new == 2
+        assert fetched == 2
         assert callback.call_count == 2
         assert poller.trade_count == 2
 
@@ -138,9 +139,10 @@ class TestTradePoller:
         mock_client.get.return_value = mock_response
 
         poller = TradePoller(on_trade=callback, condition_ids=["0xcond1"])
-        count = await poller._poll_market("0xcond1", mock_client)
+        new, fetched = await poller._poll_market("0xcond1", mock_client)
 
-        assert count == 1
+        assert new == 1
+        assert fetched == 2
         assert callback.call_count == 1
 
     @pytest.mark.asyncio
@@ -157,11 +159,11 @@ class TestTradePoller:
         mock_client.get.return_value = mock_response
 
         poller = TradePoller(on_trade=callback, condition_ids=["0xcond1"])
-        count1 = await poller._poll_market("0xcond1", mock_client)
-        count2 = await poller._poll_market("0xcond1", mock_client)  # same events
+        new1, _ = await poller._poll_market("0xcond1", mock_client)
+        new2, _ = await poller._poll_market("0xcond1", mock_client)  # same events
 
-        assert count1 == 1
-        assert count2 == 0
+        assert new1 == 1
+        assert new2 == 0
         assert callback.call_count == 1
 
     @pytest.mark.asyncio
@@ -173,9 +175,10 @@ class TestTradePoller:
         mock_client.get.return_value = mock_response
 
         poller = TradePoller(on_trade=callback, condition_ids=["0xnone"])
-        count = await poller._poll_market("0xnone", mock_client)
+        new, fetched = await poller._poll_market("0xnone", mock_client)
 
-        assert count == 0
+        assert new == 0
+        assert fetched == 0
         assert callback.call_count == 0
 
     @pytest.mark.asyncio
@@ -189,9 +192,10 @@ class TestTradePoller:
         mock_client.get.return_value = mock_response
 
         poller = TradePoller(on_trade=callback, condition_ids=["0xcond1"])
-        count = await poller._poll_market("0xcond1", mock_client)
+        new, fetched = await poller._poll_market("0xcond1", mock_client)
 
-        assert count == 0
+        assert new == 0
+        assert fetched == 0
 
     @pytest.mark.asyncio
     async def test_poll_market_malformed_events_skipped(self, callback):
@@ -210,9 +214,10 @@ class TestTradePoller:
         mock_client.get.return_value = mock_response
 
         poller = TradePoller(on_trade=callback, condition_ids=["0xcond1"])
-        count = await poller._poll_market("0xcond1", mock_client)
+        new, fetched = await poller._poll_market("0xcond1", mock_client)
 
-        assert count == 1  # only the good event
+        assert new == 1  # only the good event
+        assert fetched == 1
         assert callback.call_count == 1
 
     @pytest.mark.asyncio
@@ -223,7 +228,7 @@ class TestTradePoller:
 
     @pytest.mark.asyncio
     async def test_poll_all_increments_count(self, callback):
-        with patch.object(TradePoller, "_poll_market", return_value=0) as mock_poll:
+        with patch.object(TradePoller, "_poll_market", return_value=(0, 0)) as mock_poll:
             poller = TradePoller(
                 on_trade=callback,
                 condition_ids=["0xa", "0xb"],
@@ -275,7 +280,7 @@ class TestColdTier:
 
     @pytest.mark.asyncio
     async def test_poll_batch_cold_increments_cold_count(self, callback):
-        with patch.object(TradePoller, "_poll_market", return_value=2):
+        with patch.object(TradePoller, "_poll_market", return_value=(2, 2)):
             poller = TradePoller(
                 on_trade=callback,
                 cold_condition_ids=["c1", "c2"],
@@ -288,7 +293,7 @@ class TestColdTier:
 
     @pytest.mark.asyncio
     async def test_poll_batch_hot_does_not_touch_cold_stats(self, callback):
-        with patch.object(TradePoller, "_poll_market", return_value=1):
+        with patch.object(TradePoller, "_poll_market", return_value=(1, 1)):
             poller = TradePoller(
                 on_trade=callback,
                 condition_ids=["h1"],

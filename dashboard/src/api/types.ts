@@ -140,6 +140,7 @@ export interface MetricsOverview {
   classification: Record<string, number>
   score_distribution: Record<string, number>
   top_markets: TopMarket[]
+  top_traded_markets: TopTradedMarket[]
   tier2_coverage: { real: number; fallback: number; total: number }
 }
 
@@ -186,6 +187,14 @@ export interface TopMarket {
   signal_count: number
   max_score: number | null
   avg_score: number | null
+}
+
+export interface TopTradedMarket {
+  market_id: string
+  question: string | null
+  trade_count: number
+  volume_usd: number
+  unique_wallets: number
 }
 
 export interface IngestionMetrics {

@@ -84,6 +84,23 @@ async def _periodic_market_sync(conn: object, interval_hours: int) -> None:
             logger.error("Market sync failed", error=str(exc))
 
 
+async def _periodic_hot_market_refresh(poller: TradePoller, interval_seconds: int = 1800) -> None:
+    """Re-fetch the top-N most active markets every *interval_seconds* and hot-swap the poller list.
+
+    Active markets shift over the day; refreshing every 30 min keeps the hot tier
+    tracking the currently highest-volume markets instead of those active at startup.
+    """
+    while True:
+        await asyncio.sleep(interval_seconds)
+        try:
+            active_markets = await fetch_active_markets(limit=settings.trade_poll_max_markets)
+            new_condition_ids = [cid for cid, _ in active_markets]
+            poller.update_markets(new_condition_ids)
+            logger.info("Hot market list refreshed", count=len(new_condition_ids))
+        except Exception as exc:
+            logger.warning("Hot market refresh failed", error=str(exc))
+
+
 async def _periodic_status(
     writer: BatchWriter,
     listener: Listener,
@@ -269,6 +286,14 @@ async def run_ingester(
             asyncio.create_task(
                 _periodic_market_sync(conn, settings.market_sync_interval_hours),
                 name="market_sync",
+            )
+        )
+
+        # Periodic hot-market list refresh (every 30 min)
+        tasks.append(
+            asyncio.create_task(
+                _periodic_hot_market_refresh(poller),
+                name="hot_market_refresh",
             )
         )
 

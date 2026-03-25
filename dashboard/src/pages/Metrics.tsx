@@ -57,6 +57,7 @@ export default function Metrics() {
   const classification = overview?.classification ?? {}
   const scoreDist = overview?.score_distribution ?? {}
   const topMarkets = overview?.top_markets ?? []
+  const topTradedMarkets = overview?.top_traded_markets ?? []
   const t2cov = overview?.tier2_coverage ?? { real: 0, fallback: 0, total: 0 }
 
   const t1Used = budget?.tier1.calls_used ?? 0
@@ -230,19 +231,81 @@ export default function Metrics() {
         </div>
       )}
 
-      {/* ── Row 2: Funnel + Score Distribution + Classification ─── */}
+      {/* ── Row 2: Top Traded Markets + Score Distribution + Classification ─── */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-        {/* Detection Funnel */}
+        {/* Most Traded Markets */}
         <div className="bg-surface-1 border border-border-subtle rounded-sm p-4">
-          <div className="text-[11px] uppercase tracking-wider text-neutral-500 mb-4">
-            Detection Funnel (Today)
+          <div className="text-[11px] uppercase tracking-wider text-neutral-500 mb-3">
+            Most Traded Markets (24h)
           </div>
-          <div className="space-y-3">
-            <FunnelRow label="Trades" value={funnel?.trades} total={funnel?.trades} />
-            <FunnelRow label="Signals" value={funnel?.signals} total={funnel?.trades} />
-            <FunnelRow label="Classified" value={funnel?.classified} total={funnel?.trades} />
-            <FunnelRow label="High Suspicion" value={funnel?.high_suspicion} total={funnel?.trades} accent />
-          </div>
+          {topTradedMarkets.length === 0 ? (
+            <div className="h-44 flex items-center justify-center text-neutral-600 text-sm">
+              No trade data yet.
+            </div>
+          ) : (
+            <div className="h-44">
+              <ResponsiveContainer width="100%" height="100%">
+                <BarChart
+                  data={topTradedMarkets.map((m) => ({
+                    label: m.question
+                      ? m.question.length > 28 ? m.question.slice(0, 28) + '…' : m.question
+                      : m.market_id.slice(0, 12) + '…',
+                    trades: m.trade_count,
+                    wallets: m.unique_wallets,
+                  }))}
+                  layout="vertical"
+                  margin={{ top: 0, right: 36, bottom: 0, left: 4 }}
+                >
+                  <XAxis
+                    type="number"
+                    tick={{ fill: '#525252', fontSize: 10 }}
+                    axisLine={false}
+                    tickLine={false}
+                    allowDecimals={false}
+                  />
+                  <YAxis
+                    type="category"
+                    dataKey="label"
+                    width={110}
+                    tick={{ fill: '#737373', fontSize: 9 }}
+                    axisLine={false}
+                    tickLine={false}
+                  />
+                  <Tooltip
+                    contentStyle={{
+                      background: '#191919',
+                      border: '1px solid #2a2a2a',
+                      borderRadius: '3px',
+                      fontSize: '11px',
+                      color: '#d4d4d4',
+                    }}
+                    labelStyle={{ color: '#737373' }}
+                    formatter={(value: number, name: string) => [
+                      value,
+                      name === 'trades' ? 'Trades' : 'Wallets',
+                    ]}
+                  />
+                  <Bar dataKey="trades" fill="#3b82f6" radius={[0, 2, 2, 0]} maxBarSize={14} name="trades" />
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
+          )}
+          {/* Funnel stats as compact row below chart */}
+          {funnel && (
+            <div className="mt-3 pt-3 border-t border-border-subtle grid grid-cols-4 gap-2">
+              {([
+                { label: 'Trades', value: funnel.trades, color: 'text-neutral-300' },
+                { label: 'Signals', value: funnel.signals, color: 'text-amber-400' },
+                { label: 'Classified', value: funnel.classified, color: 'text-blue-400' },
+                { label: '≥80', value: funnel.high_suspicion, color: 'text-red-400' },
+              ] as const).map(({ label, value, color }) => (
+                <div key={label} className="text-center">
+                  <div className={`font-mono text-sm font-medium ${color}`}>{fmtNum(value)}</div>
+                  <div className="text-[9px] text-neutral-600 mt-0.5">{label}</div>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
 
         {/* Score Distribution */}
@@ -589,44 +652,6 @@ export default function Metrics() {
           </div>
         </div>
       )}
-    </div>
-  )
-}
-
-/* ── Funnel Row Component ────────────────────────────────────────── */
-function FunnelRow({
-  label,
-  value,
-  total,
-  accent,
-}: {
-  label: string
-  value: number | undefined
-  total: number | undefined
-  accent?: boolean
-}) {
-  const v = value ?? 0
-  const t = total && total > 0 ? total : 1
-  const pct = Math.round((v / t) * 100)
-  const barWidth = Math.max(2, pct)
-
-  return (
-    <div className="space-y-1">
-      <div className="flex items-center justify-between">
-        <span className="text-xs text-neutral-400">{label}</span>
-        <span className={`font-mono text-sm font-medium ${accent ? 'text-red-400' : 'text-neutral-100'}`}>
-          {fmtNum(v)}
-          <span className="text-neutral-600 text-[10px] ml-1">
-            {total != null && total > 0 && label !== 'Trades' ? `${pct}%` : ''}
-          </span>
-        </span>
-      </div>
-      <div className="h-1.5 bg-surface-3 rounded-full overflow-hidden">
-        <div
-          className={`h-full rounded-full transition-all ${accent ? 'bg-red-500' : 'bg-amber-500'}`}
-          style={{ width: `${barWidth}%` }}
-        />
-      </div>
     </div>
   )
 }

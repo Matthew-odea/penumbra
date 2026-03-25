@@ -106,8 +106,8 @@ class Settings(BaseSettings):
     ingester_flush_interval_seconds: int = 1
     coordination_wallet_count_min: int = 3  # min distinct wallets to flag coordination
     market_sync_interval_hours: int = 6
-    trade_poll_interval_seconds: int = 30
-    trade_poll_max_markets: int = 20
+    trade_poll_interval_seconds: int = 15
+    trade_poll_max_markets: int = 50
     trade_poll_cold_batch: int = 50
     trade_poll_cold_interval_seconds: int = 60
 

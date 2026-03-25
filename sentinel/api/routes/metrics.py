@@ -197,6 +197,33 @@ async def overview() -> dict:
         for r in market_rows
     ]
 
+    # ── Top traded markets by volume (last 24h) ─────────────────────
+    traded_rows = db.execute("""
+        SELECT
+            t.market_id,
+            m.question,
+            COUNT(*) AS trade_count,
+            SUM(t.size_usd) AS volume_usd,
+            COUNT(DISTINCT t.wallet) AS unique_wallets
+        FROM trades t
+        LEFT JOIN markets m ON t.market_id = m.market_id
+        WHERE t.timestamp >= CURRENT_TIMESTAMP - INTERVAL '24 hours'
+        GROUP BY t.market_id, m.question
+        ORDER BY trade_count DESC
+        LIMIT 10
+    """).fetchall()
+
+    top_traded_markets = [
+        {
+            "market_id": r[0],
+            "question": r[1],
+            "trade_count": r[2],
+            "volume_usd": round(float(r[3]), 2) if r[3] else 0,
+            "unique_wallets": r[4],
+        }
+        for r in traded_rows
+    ]
+
     # ── Tier 2 coverage (today) ─────────────────────────────────────
     t2_row = db.execute("""
         SELECT
@@ -218,6 +245,7 @@ async def overview() -> dict:
         "classification": classification,
         "score_distribution": score_distribution,
         "top_markets": top_markets,
+        "top_traded_markets": top_traded_markets,
         "tier2_coverage": tier2_coverage,
     }
 
