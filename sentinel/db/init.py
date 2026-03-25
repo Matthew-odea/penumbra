@@ -361,6 +361,13 @@ def init_schema(db_path: Path | None = None) -> duckdb.DuckDBPyConnection:
         conn.execute("ALTER TABLE signals ADD COLUMN liquidity_cliff BOOLEAN DEFAULT FALSE")
         logger.info("Migration: added 'liquidity_cliff' column to signals table")
 
+    # Force WAL checkpoint so all schema changes are flushed to the .duckdb
+    # file before this function returns.  Without this, if the process is
+    # killed between a migration ALTER TABLE and DuckDB's next automatic
+    # checkpoint, the WAL file is left with a partial replay that triggers
+    # "Calling DatabaseManager::GetDefaultDatabase with no default database
+    # set" on every subsequent startup — causing a crash-loop on every deploy.
+    conn.execute("CHECKPOINT")
     logger.info("Schema initialized successfully")
 
     # Log table counts for verification
