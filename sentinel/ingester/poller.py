@@ -281,7 +281,7 @@ class TradePoller:
 
         try:
             resp = await client.get(
-                url, params={"condition_id": condition_id, "limit": 50}
+                url, params={"condition_id": condition_id, "limit": settings.trade_poll_limit}
             )
 
             if resp.status_code == 404:
