@@ -49,10 +49,10 @@ resource "aws_instance" "penumbra" {
   iam_instance_profile   = aws_iam_instance_profile.ec2.name
   vpc_security_group_ids = [aws_security_group.penumbra.id]
 
-  # Root volume — OS + Docker layers
+  # Root volume — OS + Docker layers (AL2023 snapshot requires >= 30 GB)
   root_block_device {
     volume_type = "gp3"
-    volume_size = 20
+    volume_size = 30
     encrypted   = true
   }
 
