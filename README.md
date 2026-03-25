@@ -62,11 +62,11 @@ penumbra/
 │   ├── integrations/        # Per-service integration guides
 │   └── sprints/             # Sprint specs (0-4)
 ├── sentinel/                # Python core engine
-│   ├── ingester/            # Sprint 1 — WebSocket listener & DuckDB writer
-│   ├── scanner/             # Sprint 2 — Statistical signal detection
-│   ├── judge/               # Sprint 3 — Bedrock LLM reasoning layer
-│   ├── alerts/              # Alert service (TBD)
-│   ├── api/                 # Sprint 4 — FastAPI gateway
+│   ├── ingester/            # WebSocket listener & DuckDB writer
+│   ├── scanner/             # Statistical signal detection
+│   ├── judge/               # Bedrock LLM reasoning layer
+│   ├── alerts/              # Alert delivery (TBD)
+│   ├── api/                 # FastAPI gateway
 │   ├── db/                  # DuckDB schema & helpers
 │   └── config.py            # Centralized settings (Pydantic BaseSettings)
 ├── dashboard/               # Sprint 4 — Vite + React + Tailwind frontend
@@ -131,7 +131,7 @@ See [docs/architecture/](docs/architecture/) for full ADRs. Highlights:
 | Layer | Technology |
 |-------|-----------|
 | Pipeline | Python 3.13, asyncio, structlog |
-| Database | DuckDB 1.5 (5 tables, 3 views) |
+| Database | DuckDB 1.5 (6 tables, 7 views) |
 | LLM | AWS Bedrock — Amazon Nova Lite (T1), Nova Pro (T2) |
 | Funding | Polygon RPC via Alchemy |
 | News | Tavily Search API |

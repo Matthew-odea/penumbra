@@ -2,7 +2,7 @@
 
 Writes every classification to the ``signal_reasoning`` table and pushes
 high-scoring signals (≥ ``settings.alert_min_score``) onto the alert queue
-for downstream delivery (Sprint 4).
+for downstream delivery.
 """
 
 from __future__ import annotations
@@ -25,7 +25,7 @@ logger = structlog.get_logger()
 
 @dataclass(frozen=True, slots=True)
 class Alert:
-    """A high-suspicion signal ready for delivery (Sprint 4 consumes these)."""
+    """A high-suspicion signal ready for downstream delivery."""
 
     signal: Signal
     score: int

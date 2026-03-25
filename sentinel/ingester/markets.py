@@ -143,8 +143,12 @@ def _extract_yes_price(tokens: list[dict[str, Any]]) -> float | None:
 def upsert_markets(conn: Any, markets: list[dict[str, Any]]) -> int:
     """Upsert market metadata into DuckDB.
 
-    Preserves existing ``attractiveness_score`` and ``attractiveness_reason``
-    so the LLM scoring is not overwritten on every sync.
+    Uses INSERT ... ON CONFLICT DO UPDATE so that:
+    - New markets are inserted with NULL attractiveness fields (scored later).
+    - Existing markets get all metadata refreshed except attractiveness_score
+      and attractiveness_reason, which are preserved via COALESCE.
+    - Markets absent from a partial API response are NOT deleted — they keep
+      their existing row intact, preventing data loss on CDN hiccups.
 
     Returns the number of rows upserted.
     """
@@ -171,34 +175,24 @@ def upsert_markets(conn: Any, markets: list[dict[str, Any]]) -> int:
             datetime.now(UTC),
         ))
 
-    market_ids = [r[0] for r in rows]
-    placeholders = ",".join(["?"] * len(market_ids))
-
-    # Delete + re-insert but preserve attractiveness scores
-    # We use a temp table approach: read existing scores, delete, insert with scores restored
-    existing_scores: dict[str, tuple[int | None, str | None]] = {}
-    try:
-        score_rows = conn.execute(
-            f"SELECT market_id, attractiveness_score, attractiveness_reason "
-            f"FROM markets WHERE market_id IN ({placeholders})",
-            market_ids,
-        ).fetchall()
-        existing_scores = {r[0]: (r[1], r[2]) for r in score_rows}
-    except Exception:
-        pass
-
-    conn.execute(f"DELETE FROM markets WHERE market_id IN ({placeholders})", market_ids)
     conn.executemany(
         """INSERT INTO markets
-           (market_id, question, slug, category, end_date,
-            volume_usd, liquidity_usd, active, resolved, last_price,
-            last_synced, attractiveness_score, attractiveness_reason)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-        [
-            (*r, existing_scores.get(r[0], (None, None))[0],
-                 existing_scores.get(r[0], (None, None))[1])
-            for r in rows
-        ],
+               (market_id, question, slug, category, end_date,
+                volume_usd, liquidity_usd, active, resolved, last_price,
+                last_synced)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+           ON CONFLICT (market_id) DO UPDATE SET
+               question        = excluded.question,
+               slug            = excluded.slug,
+               category        = excluded.category,
+               end_date        = excluded.end_date,
+               volume_usd      = excluded.volume_usd,
+               liquidity_usd   = excluded.liquidity_usd,
+               active          = excluded.active,
+               resolved        = excluded.resolved,
+               last_price      = excluded.last_price,
+               last_synced     = excluded.last_synced""",
+        rows,
     )
     logger.info("Markets upserted", count=len(rows))
     return len(rows)

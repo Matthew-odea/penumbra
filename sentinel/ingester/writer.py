@@ -2,8 +2,7 @@
 
 Accumulates trades in memory and flushes when either the batch size or the
 time interval threshold is reached.  After a successful write the batch is
-optionally forwarded to an ``asyncio.Queue`` (consumed by the Scanner in
-Sprint 2).
+optionally forwarded to an ``asyncio.Queue`` consumed by the Scanner.
 """
 
 from __future__ import annotations
@@ -33,8 +32,7 @@ class BatchWriter:
 
     Args:
         conn: Open DuckDB connection.
-        scanner_queue: Optional ``asyncio.Queue`` to push batches for downstream
-            processing (Sprint 2).
+        scanner_queue: Optional ``asyncio.Queue`` to push batches for downstream processing.
         batch_size: Number of trades that trigger a flush.
         flush_interval: Seconds between automatic flushes.
         dry_run: When ``True``, print trades as JSON instead of writing to DB.
@@ -123,12 +121,18 @@ class BatchWriter:
     def _write_batch(self, batch: list[Trade]) -> None:
         t0 = time.perf_counter()
         rows = [t.as_db_tuple() for t in batch]
-        before = self._conn.execute("SELECT COUNT(*) FROM trades").fetchone()[0]
+        # Count pre-existing trade_ids via the PK index (O(batch) not O(table)).
+        # Avoids two full COUNT(*) scans that grow with the trades table.
+        trade_ids = [t.trade_id for t in batch]
+        placeholders = ",".join(["?"] * len(trade_ids))
+        pre_existing = self._conn.execute(
+            f"SELECT COUNT(*) FROM trades WHERE trade_id IN ({placeholders})",
+            trade_ids,
+        ).fetchone()[0]
         self._conn.executemany(_INSERT_SQL, rows)
-        after = self._conn.execute("SELECT COUNT(*) FROM trades").fetchone()[0]
         elapsed_ms = (time.perf_counter() - t0) * 1000
-        inserted = after - before
-        duplicates = len(batch) - inserted
+        inserted = len(batch) - pre_existing
+        duplicates = pre_existing
         self._total_written += inserted
         if duplicates > 0:
             logger.debug("Duplicate trades skipped", count=duplicates, batch_size=len(batch))

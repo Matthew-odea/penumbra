@@ -7,6 +7,7 @@ are promoted to the Tier 2 reasoner.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import re
 import threading
@@ -260,7 +261,6 @@ async def classify(
         },
     })
     try:
-        import asyncio
         response = await asyncio.to_thread(
             client.invoke_model,
             modelId=model_id,

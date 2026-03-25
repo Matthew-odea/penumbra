@@ -2,7 +2,7 @@
 
 Combines volume anomaly, price impact, wallet reputation, and funding
 anomaly metrics into a single 0-100 "statistical score" that determines
-whether a trade is forwarded to the Judge (Sprint 3).
+whether a trade is forwarded to the Judge.
 
 Weight distribution (configurable):
   - Volume anomaly (Z-score):  0-40 points
@@ -52,12 +52,9 @@ class Signal:
     statistical_score: int
     created_at: datetime
 
-    # Enriched signals (sprint 4) — defaults allow existing callers to omit these
     ofi_score: float | None = None       # Order flow imbalance [-1, 1]; None = no data
     hours_to_resolution: int | None = None  # Hours from trade to market end_date
     market_concentration: float = 0.0    # Fraction of wallet's recent trades on this market
-
-    # Detection improvements (sprint 5)
     coordination_wallet_count: int = 0   # Distinct wallets in same 5-min window (≥3 = coordinated)
     liquidity_cliff: bool = False        # Spread widened >30% in 10 min before trade
 
@@ -205,11 +202,13 @@ def compute_statistical_score(
             score += max(1, w_fun // 4)  # age unknown, apply minimum signal
 
     # ── Zero-history suspicion bonus ──────────────────────────────────────
-    # Unknown wallet + large trade is inherently suspicious.
+    # Wallet absent from v_wallet_performance (< wallet_min_trades resolved
+    # trades) + large trade is inherently suspicious.  wallet_total_trades is
+    # None when the wallet has no resolved-trade history in the view; == 0 can
+    # never occur because the view enforces HAVING COUNT(*) >= wallet_min_trades.
     large_threshold = settings.min_trade_size_usd * settings.new_wallet_large_trade_multiplier
     if (
-        wallet_total_trades is not None
-        and wallet_total_trades == 0
+        wallet_total_trades is None
         and size_usd is not None
         and size_usd > large_threshold
     ):

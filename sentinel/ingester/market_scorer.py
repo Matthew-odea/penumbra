@@ -14,10 +14,15 @@ Examples:
 The score is stored in ``markets.attractiveness_score`` and never re-computed
 unless the market question changes.  The ``reason`` field gives a one-sentence
 explanation surfaced in the dashboard Watchlist view.
+
+Placed in the ingester package because it is called exclusively from the
+ingester pipeline; keeping it here avoids the architectural anti-pattern of
+the ingester importing from the judge package.
 """
 
 from __future__ import annotations
 
+import asyncio
 import json
 import re
 import threading
@@ -105,7 +110,11 @@ _JSON_PATTERN = re.compile(r"\{[^{}]*\}")
 
 
 def _parse_result(raw: str, *, model: str) -> MarketAttractivenessResult:
-    """Extract score + reason from LLM response, with fallback."""
+    """Extract score + reason from LLM response, with fallback.
+
+    Falls back to score=0 (exclude from hot tier) rather than 50 to avoid
+    letting unparseable responses silently pass the attractiveness threshold.
+    """
     try:
         obj = json.loads(raw.strip())
         return _result_from_dict(obj, model=model)
@@ -122,8 +131,8 @@ def _parse_result(raw: str, *, model: str) -> MarketAttractivenessResult:
 
     logger.warning("Failed to parse market scoring response", raw=raw[:200])
     return MarketAttractivenessResult(
-        score=50,
-        reason="Unable to parse model response — defaulting to neutral score",
+        score=0,  # Conservative: exclude unparseable markets from hot tier
+        reason="Unable to parse model response",
         model=model,
         input_tokens=0,
         output_tokens=0,
@@ -174,6 +183,8 @@ async def score_market_attractiveness(
 
     Returns:
         MarketAttractivenessResult with score (0-100) and reason.
+        Returns score=0 on Bedrock failure so the market is excluded from the
+        hot tier rather than silently included at a neutral score.
     """
     messages = _build_prompt(inp)
     model_id = settings.bedrock_tier1_model  # Reuse Nova Lite — cheap + fast
@@ -191,8 +202,7 @@ async def score_market_attractiveness(
         },
     })
     try:
-        # Run the synchronous boto3 call in a thread to avoid blocking the event loop
-        import asyncio
+        # Run the synchronous boto3 call in a thread to avoid blocking the event loop.
         response = await asyncio.to_thread(
             client.invoke_model,
             modelId=model_id,
@@ -215,7 +225,7 @@ async def score_market_attractiveness(
             latency_s=f"{latency:.2f}",
         )
         return MarketAttractivenessResult(
-            score=50,
+            score=0,  # Conservative: exclude failed markets from hot tier
             reason=f"Scoring failed: {exc}",
             model=model_id,
             input_tokens=0,

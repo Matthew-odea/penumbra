@@ -32,7 +32,7 @@ class Judge:
     Args:
         db: Open DuckDB connection.
         judge_queue: Incoming signals from the scanner.
-        alert_queue: Outgoing high-suspicion alerts for Sprint 4.
+        alert_queue: Outgoing high-suspicion alerts for delivery.
         dry_run: If True, skip Bedrock calls and DB writes.
         max_workers: Number of parallel workers for LLM processing (default: 8).
     """

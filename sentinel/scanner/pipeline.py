@@ -48,7 +48,7 @@ class Scanner:
     Args:
         conn: Open DuckDB connection.
         scanner_queue: Queue populated by the ingester's ``BatchWriter``.
-        judge_queue: Optional queue to push scored signals to (Sprint 3).
+        judge_queue: Optional queue to push scored signals to.
         dry_run: When ``True``, print signals to stdout instead of persisting.
     """
 
@@ -160,11 +160,20 @@ class Scanner:
             logger.debug("Wallet profile lookup failed", wallet=trade.wallet[:10], error=str(exc))
 
         # Quick pre-check: does this trade pass any filter at all?
+        # NOTE: the funding check runs *after* this gate, so we must also let
+        # through unknown wallets (wallet_total_trades is None = not yet in
+        # v_wallet_performance) with large trades — they may score purely on
+        # the funding anomaly component.
         has_volume_signal = z_score > settings.zscore_threshold
         has_impact_signal = price_impact_score > 0.01
         has_wallet_signal = is_whitelisted or (wallet_win_rate is not None and wallet_win_rate > 0.6)
+        _large_threshold = settings.min_trade_size_usd * settings.new_wallet_large_trade_multiplier
+        has_unknown_wallet = (
+            wallet_total_trades is None
+            and float(trade.size_usd) >= _large_threshold
+        )
 
-        if not (has_volume_signal or has_impact_signal or has_wallet_signal):
+        if not (has_volume_signal or has_impact_signal or has_wallet_signal or has_unknown_wallet):
             return
 
         # 4. Funding anomaly (only for trades that pass at least one filter)
@@ -217,7 +226,7 @@ class Scanner:
             size_usd=float(trade.size_usd),
             trade_timestamp=trade.timestamp,
             z_score=z_score,
-            modified_z_score=z_score,  # We use modified Z from the view
+            modified_z_score=z_score,  # Both fields store the same modified z-score (max of hourly/5m views)
             price_impact=price_impact_score,
             wallet_win_rate=wallet_win_rate,
             wallet_total_trades=wallet_total_trades,

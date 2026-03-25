@@ -144,7 +144,7 @@ async def _query_alchemy(
         ],
     }
 
-    async with httpx.AsyncClient(timeout=_ALCHEMY_TIMEOUT, verify=False) as client:
+    async with httpx.AsyncClient(timeout=_ALCHEMY_TIMEOUT) as client:
         resp = await client.post(alchemy_url, json=payload)
         resp.raise_for_status()
         data = resp.json()

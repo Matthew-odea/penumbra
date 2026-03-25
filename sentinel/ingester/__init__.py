@@ -1,4 +1,4 @@
-"""Sprint 1 — Data ingestion from Polymarket.
+"""Data ingestion from Polymarket.
 
 Components:
     - ``listener``  — WebSocket order-book event consumer

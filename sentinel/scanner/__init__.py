@@ -1,4 +1,4 @@
-"""Sprint 2 — Statistical signal detection engine."""
+"""Statistical signal detection engine."""
 
 from sentinel.scanner.funding import FundingResult, check_funding_anomaly
 from sentinel.scanner.pipeline import Scanner

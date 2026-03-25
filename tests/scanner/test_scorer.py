@@ -222,7 +222,7 @@ class TestBuildSignal:
             price_impact=0.01,
         )
         assert isinstance(signal, Signal)
-        assert signal.statistical_score == 30  # 20 (vol) + 10 (impact)
+        assert signal.statistical_score == 35  # 20 (vol) + 10 (impact) + 5 (zero-history bonus: wallet_total_trades=None + size_usd 5000 > threshold 2500)
         assert signal.trade_id == "t1"
         assert signal.signal_id  # UUID assigned
 

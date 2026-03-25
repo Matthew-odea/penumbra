@@ -15,8 +15,7 @@ logger = structlog.get_logger()
 
 SCHEMA_SQL = """
 -- =============================================================================
--- Penumbra — DuckDB Schema
--- Version: 001
+-- Penumbra — DuckDB Schema  (migrations v002–v009 applied in init_schema())
 -- =============================================================================
 
 -- ─── Core Tables ─────────────────────────────────────────────────────────────

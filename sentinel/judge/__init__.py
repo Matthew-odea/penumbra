@@ -1,4 +1,4 @@
-"""Sprint 3 — LLM-powered reasoning layer (AWS Bedrock)."""
+"""LLM-powered reasoning layer (AWS Bedrock)."""
 
 from sentinel.judge.budget import BudgetManager, BudgetStatus
 from sentinel.judge.classifier import (

@@ -34,7 +34,8 @@ from sentinel.ingester.markets import (
 from sentinel.ingester.models import BookEvent, Trade
 from sentinel.ingester.poller import TradePoller
 from sentinel.ingester.writer import BatchWriter
-from sentinel.judge.market_scorer import MarketAttractivenessInput, score_market_attractiveness
+from sentinel.ingester.market_scorer import MarketAttractivenessInput, score_market_attractiveness
+from sentinel.judge.budget import BudgetManager
 from sentinel.judge.pipeline import Judge
 from sentinel.judge.store import Alert
 from sentinel.scanner.pipeline import Scanner
@@ -53,15 +54,16 @@ async def _market_attractiveness_scorer(
 ) -> None:
     """Background task: score attractiveness for unscored markets via LLM.
 
-    Drains a queue of market_ids, fetches their metadata from the DB, calls
-    Nova Lite for a 0-100 attractiveness score, and writes the result back.
-    Runs 8 workers concurrently via a semaphore; rate is ~16 markets/second
-    so a 3,000-market backlog clears in ~3 minutes.
+    Spawns _SCORING_CONCURRENCY worker coroutines; each pulls market_ids from
+    the queue, checks the Bedrock budget, calls Nova Lite, and writes the result
+    back.  Workers are tracked via asyncio.gather so cancelling this task
+    cleanly cancels all workers and lets their finally blocks call task_done().
     """
-    sem = asyncio.Semaphore(_SCORING_CONCURRENCY)
+    budget = BudgetManager(conn)  # type: ignore[arg-type]
 
-    async def _score_one(market_id: str) -> None:
-        async with sem:
+    async def _worker(worker_id: int) -> None:
+        while True:
+            market_id = await queue.get()
             try:
                 row = conn.execute(  # type: ignore[attr-defined]
                     """SELECT question, category, end_date, liquidity_usd,
@@ -71,11 +73,20 @@ async def _market_attractiveness_scorer(
                 ).fetchone()
 
                 if row is None:
-                    return
+                    continue
 
                 # Skip if already scored (race between enqueue and processing)
                 if row[4] is not None:
-                    return
+                    continue
+
+                # Gate on Bedrock budget — market scoring shares the tier1 pool
+                if not budget.try_record_call("tier1"):
+                    logger.warning(
+                        "Market scoring budget exhausted — skipping",
+                        market_id=market_id,
+                        worker_id=worker_id,
+                    )
+                    continue
 
                 question, category, end_date, liquidity_usd, _ = row
                 end_date_str = end_date.isoformat() if end_date else "unknown"
@@ -104,10 +115,19 @@ async def _market_attractiveness_scorer(
             finally:
                 queue.task_done()
 
-    while True:
-        market_id = await queue.get()
-        # Fire-and-forget within semaphore — don't await sequentially
-        asyncio.create_task(_score_one(market_id))
+    workers = [
+        asyncio.create_task(_worker(i), name=f"market-scorer-{i}")
+        for i in range(_SCORING_CONCURRENCY)
+    ]
+    try:
+        # return_exceptions=True: one worker crash doesn't kill the rest
+        await asyncio.gather(*workers, return_exceptions=True)
+    finally:
+        # Ensure all workers are cancelled and awaited so their finally blocks
+        # (queue.task_done) run before this coroutine returns.
+        for w in workers:
+            w.cancel()
+        await asyncio.gather(*workers, return_exceptions=True)
 
 
 def _enqueue_unscored_markets(conn: object, queue: asyncio.Queue[str]) -> int:
