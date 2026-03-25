@@ -206,19 +206,22 @@ async def reason(
     client = bedrock_client or _get_bedrock_client()
 
     t0 = time.monotonic()
+    request_body = json.dumps({
+        "schemaVersion": "messages-v1",
+        "messages": messages,
+        "inferenceConfig": {
+            "maxTokens": 512,
+            "temperature": 0.2,
+        },
+    })
     try:
-        response = client.invoke_model(
+        import asyncio
+        response = await asyncio.to_thread(
+            client.invoke_model,
             modelId=model_id,
             contentType="application/json",
             accept="application/json",
-            body=json.dumps({
-                "schemaVersion": "messages-v1",
-                "messages": messages,
-                "inferenceConfig": {
-                    "maxTokens": 512,
-                    "temperature": 0.2,
-                },
-            }),
+            body=request_body,
         )
         body = json.loads(response["body"].read())
 

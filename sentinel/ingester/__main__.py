@@ -414,7 +414,7 @@ async def run_ingester(
     )
 
     # 10. REST trade poller (hot tier only)
-    if condition_ids:
+    if poller._condition_ids:
         tasks.append(
             asyncio.create_task(poller.run(), name="trade_poller")
         )

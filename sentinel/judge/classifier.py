@@ -249,21 +249,24 @@ async def classify(
     client = bedrock_client or _get_bedrock_client()
 
     t0 = time.monotonic()
+    request_body = json.dumps({
+        "schemaVersion": "messages-v1",
+        "system": [{"text": _SYSTEM_PROMPT}],
+        "messages": messages,
+        "inferenceConfig": {
+            "maxTokens": 256,
+            "temperature": 0.1,
+            "topP": 0.9,
+        },
+    })
     try:
-        response = client.invoke_model(
+        import asyncio
+        response = await asyncio.to_thread(
+            client.invoke_model,
             modelId=model_id,
             contentType="application/json",
             accept="application/json",
-            body=json.dumps({
-                "schemaVersion": "messages-v1",
-                "system": [{"text": _SYSTEM_PROMPT}],
-                "messages": messages,
-                "inferenceConfig": {
-                    "maxTokens": 256,
-                    "temperature": 0.1,
-                    "topP": 0.9,
-                },
-            }),
+            body=request_body,
         )
         body = json.loads(response["body"].read())
 
