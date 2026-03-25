@@ -39,6 +39,9 @@ class ClassificationInput:
     wallet_total_trades: int
     funding_age_minutes: int | None
     news_headlines: str
+    ofi_score: float | None = None          # Order flow imbalance [-1, 1]
+    market_concentration: float = 0.0       # Fraction of wallet's recent trades on this market
+    hours_to_resolution: int | None = None  # Hours from trade to market end_date
 
 
 @dataclass(frozen=True, slots=True)
@@ -69,6 +72,9 @@ TRADE CONTEXT:
 - Side: {side} at ${price} for ${size_usd}
 - Market liquidity: ${liquidity_usd}
 - Volume Z-score: {z_score} (vs 24h norm)
+- Order flow imbalance: {ofi_score} (directional buy/sell pressure; +1 = pure buy, -1 = pure sell)
+- Wallet market concentration: {market_concentration} (fraction of wallet's recent 50 trades on this single market; 1.0 = only trades this market)
+- Hours to market resolution: {hours_to_resolution}
 - Wallet win rate: {win_rate} ({total_trades} historical trades)
 - Wallet funded {funding_age_minutes} minutes before this trade
 
@@ -91,7 +97,10 @@ def build_prompt(inp: ClassificationInput) -> list[dict]:
         price=inp.price,
         size_usd=inp.size_usd,
         liquidity_usd=inp.liquidity_usd,
-        z_score=round(inp.z_score, 2),
+        z_score=round(min(inp.z_score, 99.9), 2),  # cap display at 99.9 — sparse-market artefact
+        ofi_score=f"{inp.ofi_score:+.2f}" if inp.ofi_score is not None else "N/A",
+        market_concentration=f"{inp.market_concentration:.0%}" if inp.market_concentration else "N/A",
+        hours_to_resolution=f"{inp.hours_to_resolution}h" if inp.hours_to_resolution is not None else "N/A",
         win_rate=f"{inp.wallet_win_rate:.1%}" if inp.wallet_win_rate else "unknown",
         total_trades=inp.wallet_total_trades,
         funding_age_minutes=inp.funding_age_minutes if inp.funding_age_minutes else "N/A",
@@ -121,6 +130,9 @@ def build_input_from_signal(
         wallet_total_trades=signal.wallet_total_trades or 0,
         funding_age_minutes=signal.funding_age_minutes,
         news_headlines=news_headlines,
+        ofi_score=signal.ofi_score,
+        market_concentration=signal.market_concentration,
+        hours_to_resolution=signal.hours_to_resolution,
     )
 
 
