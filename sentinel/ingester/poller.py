@@ -242,10 +242,21 @@ class TradePoller:
                 async with sem:
                     return await self._poll_market(cid, client)
 
-            results = await asyncio.gather(
-                *[_poll_one(cid) for cid in condition_ids],
-                return_exceptions=True,
-            )
+            # Fire in chunks of 10 with a small inter-chunk delay to stay
+            # under Polymarket's rate limit (~50 req/s).  Without this,
+            # asyncio.gather releases all tasks at once and the semaphore
+            # only limits concurrency, not the burst rate seen by the server.
+            chunk_size = 10
+            results: list[tuple[int, int] | BaseException] = []
+            for i in range(0, len(condition_ids), chunk_size):
+                chunk = condition_ids[i : i + chunk_size]
+                chunk_results = await asyncio.gather(
+                    *[_poll_one(cid) for cid in chunk],
+                    return_exceptions=True,
+                )
+                results.extend(chunk_results)
+                if i + chunk_size < len(condition_ids):
+                    await asyncio.sleep(0.2)  # 200ms between chunks → ~25 req/s
 
         new_trades = sum(r[0] for r in results if isinstance(r, tuple))
         total_fetched = sum(r[1] for r in results if isinstance(r, tuple))
