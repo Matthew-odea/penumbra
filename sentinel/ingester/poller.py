@@ -235,7 +235,7 @@ class TradePoller:
         else:
             self._cold_poll_count += 1
 
-        sem = asyncio.Semaphore(10)
+        sem = asyncio.Semaphore(50)
 
         async with httpx.AsyncClient(verify=False, timeout=15) as client:
             async def _poll_one(cid: str) -> tuple[int, int]:
