@@ -352,13 +352,17 @@ def init_schema(db_path: Path | None = None) -> duckdb.DuckDBPyConnection:
         logger.info("Migration: added 'market_concentration' column to signals table")
 
     # v005: coordination wallet count
+    # Note: ALTER TABLE ADD COLUMN with DEFAULT triggers a DuckDB WAL replay
+    # bug ("GetDefaultDatabase"). Use nullable column + UPDATE instead.
     if "coordination_wallet_count" not in sig_cols:
-        conn.execute("ALTER TABLE signals ADD COLUMN coordination_wallet_count INTEGER DEFAULT 0")
+        conn.execute("ALTER TABLE signals ADD COLUMN coordination_wallet_count INTEGER")
+        conn.execute("UPDATE signals SET coordination_wallet_count = 0 WHERE coordination_wallet_count IS NULL")
         logger.info("Migration: added 'coordination_wallet_count' column to signals table")
 
     # v006: liquidity cliff flag
     if "liquidity_cliff" not in sig_cols:
-        conn.execute("ALTER TABLE signals ADD COLUMN liquidity_cliff BOOLEAN DEFAULT FALSE")
+        conn.execute("ALTER TABLE signals ADD COLUMN liquidity_cliff BOOLEAN")
+        conn.execute("UPDATE signals SET liquidity_cliff = FALSE WHERE liquidity_cliff IS NULL")
         logger.info("Migration: added 'liquidity_cliff' column to signals table")
 
     # Force WAL checkpoint so all schema changes are flushed to the .duckdb
