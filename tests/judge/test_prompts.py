@@ -15,7 +15,6 @@ from sentinel.judge.classifier import (
 from sentinel.judge.reasoner import build_messages
 from sentinel.scanner.scorer import Signal
 
-
 # ── Fixtures ────────────────────────────────────────────────────────────────
 
 

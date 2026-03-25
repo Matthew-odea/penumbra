@@ -10,25 +10,20 @@ These tests verify that data flows correctly between:
 from __future__ import annotations
 
 import asyncio
-import json
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from unittest.mock import AsyncMock, patch
-from uuid import uuid4
 
 import duckdb
 import pytest
 from httpx import ASGITransport, AsyncClient
 
-from sentinel.api import deps
 from sentinel.db.init import SCHEMA_SQL
 from sentinel.judge.classifier import ClassificationResult
 from sentinel.judge.pipeline import Judge
 from sentinel.judge.reasoner import ReasoningResult
 from sentinel.judge.store import Alert, store_reasoning
-from sentinel.scanner.pipeline import Scanner
 from sentinel.scanner.scorer import Signal, build_signal, write_signal
-
 
 # ── Shared fixture ──────────────────────────────────────────────────────────
 
@@ -88,10 +83,10 @@ def _full_db() -> duckdb.DuckDBPyConnection:
         score = 30 + i * 10
         conn.execute(
             "INSERT INTO signals VALUES "
-            "(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             [sid, f"trade-{i:03d}", mid, wallet, "BUY", 0.65, 5000.0,
              base + timedelta(minutes=i * 15),
-             3.5, 2.1, 0.03, 0.72, 15, False, False, None, score, 0.0, None, 0.0, now],
+             3.5, 2.1, 0.03, 0.72, 15, False, False, None, score, 0.0, None, 0.0, 0, False, now],
         )
 
     # Reasoning for first 6 signals

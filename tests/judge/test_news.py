@@ -14,7 +14,6 @@ from sentinel.judge.news import (
     format_headlines,
 )
 
-
 # ── Fixtures ────────────────────────────────────────────────────────────────
 
 

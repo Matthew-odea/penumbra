@@ -7,15 +7,11 @@ import json
 from datetime import UTC, datetime
 from unittest.mock import MagicMock
 
-import pytest
-
 from sentinel.judge.classifier import ClassificationResult
 from sentinel.judge.reasoner import (
-    ReasoningResult,
     reason,
 )
 from sentinel.scanner.scorer import Signal
-
 
 # ── Fixtures ────────────────────────────────────────────────────────────────
 

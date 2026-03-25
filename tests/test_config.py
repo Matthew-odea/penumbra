@@ -1,6 +1,5 @@
 """Test configuration loading."""
 
-import os
 
 from sentinel.config import Settings
 

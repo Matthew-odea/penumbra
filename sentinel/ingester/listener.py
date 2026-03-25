@@ -19,10 +19,10 @@ from __future__ import annotations
 import asyncio
 import json
 import ssl
-from typing import Any, Callable, Coroutine
+from collections.abc import Callable, Coroutine
+from typing import Any
 
 import structlog
-import websockets
 import websockets.asyncio.client as ws_client
 from websockets.asyncio.client import ClientConnection
 

@@ -3,20 +3,18 @@
 from __future__ import annotations
 
 import asyncio
-import io
 import json
 from datetime import UTC, datetime
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 import duckdb
 import pytest
 
-from sentinel.judge.pipeline import Judge
-from sentinel.judge.store import Alert, build_alert, store_reasoning
 from sentinel.judge.classifier import ClassificationResult
+from sentinel.judge.pipeline import Judge
 from sentinel.judge.reasoner import ReasoningResult
+from sentinel.judge.store import Alert, build_alert, store_reasoning
 from sentinel.scanner.scorer import Signal
-
 
 # ── Fixtures ────────────────────────────────────────────────────────────────
 

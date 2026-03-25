@@ -3,7 +3,6 @@
 from datetime import UTC, datetime, timedelta
 
 import duckdb
-import pytest
 
 from sentinel.scanner.price_impact import (
     PriceImpact,

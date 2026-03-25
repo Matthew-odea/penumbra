@@ -2,17 +2,11 @@
 
 from __future__ import annotations
 
-import asyncio
-import json
-from datetime import UTC, datetime
-from unittest.mock import AsyncMock, patch
-
 import pytest
 
 from sentinel.db.init import init_schema
 from sentinel.ingester.markets import _parse_end_date, upsert_markets
 from sentinel.ingester.models import parse_rest_trade
-
 
 # ── market sync tests ──────────────────────────────────────────────────────
 

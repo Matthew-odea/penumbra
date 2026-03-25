@@ -1,12 +1,9 @@
 """Tests for sentinel.scanner.wallet_profiler — wallet win-rate computation."""
 
-from datetime import UTC, datetime, timedelta
 
 import duckdb
-import pytest
 
 from sentinel.scanner.wallet_profiler import (
-    WalletProfile,
     get_top_wallets,
     get_wallet_profile,
     get_whitelisted_wallets,

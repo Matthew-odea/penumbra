@@ -17,7 +17,7 @@ import pytest
 from sentinel.db.init import SCHEMA_SQL
 from sentinel.judge.classifier import ClassificationResult
 from sentinel.judge.reasoner import ReasoningResult
-from sentinel.judge.store import Alert, build_alert, store_reasoning
+from sentinel.judge.store import build_alert, store_reasoning
 from sentinel.scanner.scorer import (
     Signal,
     build_signal,
@@ -25,7 +25,6 @@ from sentinel.scanner.scorer import (
     write_signal,
     write_signals,
 )
-
 
 # ── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -311,9 +310,9 @@ class TestSignalPersistence:
         assert count == 1
 
     def test_signal_as_db_tuple_length(self):
-        """The tuple must match the INSERT column count (21)."""
+        """The tuple must match the INSERT column count (23)."""
         sig = _make_signal()
-        assert len(sig.as_db_tuple()) == 21
+        assert len(sig.as_db_tuple()) == 23
 
     def test_signal_as_dict_keys(self):
         sig = _make_signal()

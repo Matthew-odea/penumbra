@@ -2,16 +2,11 @@
 
 from __future__ import annotations
 
-import asyncio
-import json
-from decimal import Decimal
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from sentinel.ingester.models import Trade
 from sentinel.ingester.poller import TradePoller, _BoundedSet
-
 
 # ── _BoundedSet tests ───────────────────────────────────────────────────────
 

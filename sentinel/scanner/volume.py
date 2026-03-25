@@ -182,12 +182,96 @@ def get_market_concentration(conn: Any, wallet: str, market_id: str) -> float:
     return float(row[0])
 
 
+_ZSCORE_5M_FOR_MARKET_SQL = """
+SELECT modified_z_score
+FROM v_volume_anomalies_5m
+WHERE market_id = ?
+ORDER BY hour_bucket DESC
+LIMIT 1
+"""
+
+
+def get_zscore_5m_for_market(conn: Any, market_id: str) -> float:
+    """Return the latest 5-minute modified Z-score for a single market.
+
+    Returns 0.0 if the market has no data in the current 5-min window.
+    """
+    row = conn.execute(_ZSCORE_5M_FOR_MARKET_SQL, [market_id]).fetchone()
+    return float(row[0]) if row else 0.0
+
+
+_COORDINATION_SQL = """
+SELECT wallet_count, collective_volume_usd
+FROM v_coordination_signals
+WHERE market_id = ?
+  AND side = ?
+ORDER BY window_start DESC
+LIMIT 1
+"""
+
+
+def get_coordination_signal(conn: Any, market_id: str, side: str) -> tuple[int, float] | None:
+    """Return (wallet_count, collective_volume_usd) for the most recent
+    5-min coordination window on this market+side.
+
+    Returns None if no coordination detected (< 3 distinct wallets).
+    """
+    row = conn.execute(_COORDINATION_SQL, [market_id, side]).fetchone()
+    if not row:
+        return None
+    return int(row[0] or 0), float(row[1] or 0)
+
+
+_LIQUIDITY_CLIFF_SQL = """
+WITH recent AS (
+    SELECT
+        best_ask - best_bid AS spread,
+        ts
+    FROM book_snapshots
+    WHERE market_id = ?
+      AND ts >= CURRENT_TIMESTAMP - INTERVAL '10 minutes'
+),
+spread_stats AS (
+    SELECT
+        arg_max(spread, ts) AS current_spread,
+        arg_min(spread, ts) AS oldest_spread
+    FROM recent
+)
+SELECT
+    current_spread,
+    oldest_spread,
+    CASE
+        WHEN oldest_spread > 0
+        THEN (current_spread - oldest_spread) / oldest_spread
+        ELSE 0
+    END AS spread_change_pct
+FROM spread_stats
+WHERE oldest_spread IS NOT NULL
+"""
+
+
+def get_liquidity_cliff(conn: Any, market_id: str) -> tuple[bool, float]:
+    """Return (is_cliff, spread_change_pct) for the given market.
+
+    A liquidity cliff is defined as the spread widening by >30% in the last
+    10 minutes — indicating market makers withdrawing liquidity before an
+    informed trade.
+
+    Returns (False, 0.0) if insufficient snapshot data (< 2 snapshots).
+    """
+    row = conn.execute(_LIQUIDITY_CLIFF_SQL, [market_id]).fetchone()
+    if not row:
+        return False, 0.0
+    spread_change_pct = float(row[2] or 0)
+    return spread_change_pct > 0.30, spread_change_pct
+
+
 def get_hours_to_resolution(conn: Any, market_id: str, trade_timestamp: Any) -> int | None:
     """Return hours between trade_timestamp and market end_date.
 
     Returns None if end_date is unknown or already passed.
     """
-    from datetime import UTC, datetime
+    from datetime import UTC
 
     row = conn.execute(_HOURS_TO_RESOLUTION_SQL, [market_id]).fetchone()
     if not row or row[0] is None:

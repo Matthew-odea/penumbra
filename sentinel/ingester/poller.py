@@ -26,7 +26,8 @@ from __future__ import annotations
 import asyncio
 import ssl
 from collections import OrderedDict
-from typing import Any, Callable, Coroutine
+from collections.abc import Callable, Coroutine
+from typing import Any
 
 import httpx
 import structlog

@@ -2,10 +2,7 @@
 
 from pathlib import Path
 
-import duckdb
-import pytest
-
-from sentinel.db.init import SCHEMA_SQL, init_schema
+from sentinel.db.init import init_schema
 
 
 class TestSchemaInit:

@@ -7,7 +7,7 @@ configured categories, and upserts into the DuckDB ``markets`` table.
 from __future__ import annotations
 
 import ssl
-from datetime import datetime, UTC
+from datetime import UTC, datetime
 from typing import Any
 
 import httpx

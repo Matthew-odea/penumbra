@@ -103,7 +103,7 @@ class Judge:
                 signal = await asyncio.wait_for(
                     self._judge_queue.get(), timeout=1.0
                 )
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 continue
 
             async with self._semaphore:

@@ -14,7 +14,6 @@ from datetime import UTC, datetime
 
 import structlog
 
-from sentinel.config import settings
 from sentinel.db.init import init_schema
 from sentinel.judge.budget import BudgetManager
 from sentinel.judge.pipeline import Judge

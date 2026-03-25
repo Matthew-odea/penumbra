@@ -11,8 +11,7 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
-from typing import Any
+from datetime import UTC, datetime
 
 import httpx
 import structlog
@@ -33,10 +32,13 @@ class FundingResult:
     checked_at: datetime
 
 
-# ── In-memory cache (wallet → FundingResult, TTL 1h) ───────────────────────
+# ── In-memory cache (wallet → FundingResult, split TTL) ────────────────────
+# Anomalous wallets cached 24h (their age won't change).
+# Non-anomalous wallets cached 1h (re-check in case they get funded).
 
 _cache: dict[str, tuple[float, FundingResult]] = {}
-_CACHE_TTL = 3600  # seconds
+_CACHE_TTL_ANOMALY = 86400  # 24 hours
+_CACHE_TTL_CLEAN = 3600     # 1 hour
 
 
 def _get_cached(wallet: str) -> FundingResult | None:
@@ -44,7 +46,8 @@ def _get_cached(wallet: str) -> FundingResult | None:
     if entry is None:
         return None
     ts, result = entry
-    if time.monotonic() - ts > _CACHE_TTL:
+    ttl = _CACHE_TTL_ANOMALY if result.is_anomaly else _CACHE_TTL_CLEAN
+    if time.monotonic() - ts > ttl:
         del _cache[wallet]
         return None
     return result

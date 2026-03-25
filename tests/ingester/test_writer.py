@@ -6,16 +6,12 @@ import asyncio
 import json
 from datetime import UTC, datetime
 from decimal import Decimal
-from io import StringIO
-from unittest.mock import MagicMock
 
-import duckdb
 import pytest
 
 from sentinel.db.init import init_schema
 from sentinel.ingester.models import Trade
 from sentinel.ingester.writer import BatchWriter
-
 
 # ── Helpers ─────────────────────────────────────────────────────────────────
 

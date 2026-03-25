@@ -26,13 +26,16 @@ import structlog
 from sentinel.config import settings
 from sentinel.ingester.models import BookEvent, IngesterEvent, Trade
 from sentinel.scanner.funding import check_funding_anomaly
-from sentinel.scanner.price_impact import compute_impact_score, get_price_impact
+from sentinel.scanner.price_impact import get_price_impact
 from sentinel.scanner.scorer import Signal, build_signal, write_signal
 from sentinel.scanner.volume import (
-    get_zscore_for_market,
-    get_ofi_for_market,
-    get_market_concentration,
+    get_coordination_signal,
     get_hours_to_resolution,
+    get_liquidity_cliff,
+    get_market_concentration,
+    get_ofi_for_market,
+    get_zscore_5m_for_market,
+    get_zscore_for_market,
 )
 from sentinel.scanner.wallet_profiler import get_wallet_profile
 
@@ -76,9 +79,9 @@ class Scanner:
         while self._running:
             try:
                 batch = await asyncio.wait_for(
-                    self._scanner_queue.get(), timeout=5.0
+                    self._scanner_queue.get(), timeout=2.0
                 )
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 continue
             except asyncio.CancelledError:
                 break
@@ -120,11 +123,13 @@ class Scanner:
         if float(trade.size_usd) < settings.min_trade_size_usd:
             return
 
-        # 1. Volume Z-score + OFI for this trade's market
+        # 1. Volume Z-score (max of hourly and 5-min windows) + OFI
         z_score = 0.0
         ofi_score = 0.0
         try:
-            z_score = get_zscore_for_market(self._conn, trade.market_id)
+            z_hourly = get_zscore_for_market(self._conn, trade.market_id)
+            z_5m = get_zscore_5m_for_market(self._conn, trade.market_id)
+            z_score = max(z_hourly, z_5m)
         except Exception as exc:
             logger.debug("Z-score lookup failed", market=trade.market_id, error=str(exc))
         try:
@@ -186,6 +191,22 @@ class Scanner:
         except Exception as exc:
             logger.debug("Hours-to-resolution lookup failed", market=trade.market_id, error=str(exc))
 
+        # 7. Coordination detection (≥3 distinct wallets, same side, last 5 min)
+        coordination_wallet_count = 0
+        try:
+            coord = get_coordination_signal(self._conn, trade.market_id, trade.side)
+            if coord is not None:
+                coordination_wallet_count = coord[0]
+        except Exception as exc:
+            logger.debug("Coordination lookup failed", market=trade.market_id, error=str(exc))
+
+        # 8. Liquidity cliff (spread widened >30% in last 10 min)
+        liquidity_cliff = False
+        try:
+            liquidity_cliff, _ = get_liquidity_cliff(self._conn, trade.market_id)
+        except Exception as exc:
+            logger.debug("Liquidity cliff check failed", market=trade.market_id, error=str(exc))
+
         # Build and score the signal
         signal = build_signal(
             trade_id=trade.trade_id,
@@ -206,6 +227,8 @@ class Scanner:
             ofi_score=ofi_score,
             hours_to_resolution=hours_to_resolution,
             market_concentration=market_concentration,
+            coordination_wallet_count=coordination_wallet_count,
+            liquidity_cliff=liquidity_cliff,
         )
 
         if signal.statistical_score < settings.signal_min_score:

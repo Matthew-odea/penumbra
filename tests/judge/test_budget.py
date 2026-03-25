@@ -10,7 +10,6 @@ import pytest
 
 from sentinel.judge.budget import BudgetManager, BudgetStatus
 
-
 # ── Fixtures ────────────────────────────────────────────────────────────────
 
 

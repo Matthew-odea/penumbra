@@ -3,7 +3,6 @@
 from datetime import UTC, datetime, timedelta
 
 import duckdb
-import pytest
 
 from sentinel.scanner.volume import (
     VolumeAnomaly,
@@ -11,7 +10,6 @@ from sentinel.scanner.volume import (
     get_anomaly_for_market,
     get_zscore_for_market,
 )
-
 
 # ── Helpers ─────────────────────────────────────────────────────────────────
 

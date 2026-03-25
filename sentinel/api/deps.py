@@ -3,13 +3,11 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Generator
 
 import duckdb
 
 from sentinel.config import settings
 from sentinel.db.init import init_schema
-
 
 _conn: duckdb.DuckDBPyConnection | None = None
 

@@ -2,8 +2,6 @@
 
 from datetime import UTC, datetime
 
-import pytest
-
 from sentinel.scanner.scorer import (
     Signal,
     build_signal,
@@ -144,7 +142,7 @@ class TestComputeStatisticalScore:
         assert score == 20
 
     def test_funding_anomaly_moderate(self):
-        """Funding 15-60 min → 10 points."""
+        """Funding 15-60 min → int(20 * 0.75) = 15 points."""
         score = compute_statistical_score(
             z_score=0.0,
             price_impact=0.0,
@@ -154,7 +152,7 @@ class TestComputeStatisticalScore:
             funding_age_minutes=30,
             zscore_threshold=3.5,
         )
-        assert score == 10
+        assert score == 15
 
     def test_funding_anomaly_false(self):
         """No anomaly → 0 funding points even with age."""
@@ -270,4 +268,4 @@ class TestBuildSignal:
             trade_timestamp=now,
         )
         t = signal.as_db_tuple()
-        assert len(t) == 21  # 21 columns in signals table
+        assert len(t) == 23  # 23 columns in signals table (incl. coordination_wallet_count, liquidity_cliff)

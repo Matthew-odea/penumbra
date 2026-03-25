@@ -61,7 +61,8 @@ class Settings(BaseSettings):
     polygon_rpc_url: str = "https://polygon-rpc.com"
     alchemy_api_key: str = ""
     alchemy_polygon_url: str = ""
-    funding_anomaly_threshold_minutes: int = 60
+    funding_anomaly_threshold_minutes: int = 4320  # 72 hours (tiered decay applied in scorer)
+    new_wallet_large_trade_multiplier: float = 5.0  # trade > min_trade_size * this → suspicious
 
     # ── Tavily / Exa Search ─────────────────────────────────────────────────
     tavily_api_key: str = ""
@@ -101,8 +102,9 @@ class Settings(BaseSettings):
         return self
 
     # ── Ingester ────────────────────────────────────────────────────────────
-    ingester_batch_size: int = 100
-    ingester_flush_interval_seconds: int = 5
+    ingester_batch_size: int = 20
+    ingester_flush_interval_seconds: int = 1
+    coordination_wallet_count_min: int = 3  # min distinct wallets to flag coordination
     market_sync_interval_hours: int = 6
     trade_poll_interval_seconds: int = 30
     trade_poll_max_markets: int = 20

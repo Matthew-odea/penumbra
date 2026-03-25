@@ -7,7 +7,6 @@ import pytest
 
 from sentinel.ingester.models import (
     BookEvent,
-    Trade,
     parse_data_api_trade,
     parse_live_activity_event,
     parse_price_changes,
@@ -409,7 +408,7 @@ class TestParseDataApiTrade:
         assert trade is not None
         assert trade.timestamp.tzinfo is not None
         # Should be very recent
-        from datetime import datetime, UTC
+        from datetime import UTC
         delta = datetime.now(UTC) - trade.timestamp
         assert delta.total_seconds() < 5
 

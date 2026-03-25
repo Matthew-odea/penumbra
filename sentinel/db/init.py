@@ -84,6 +84,9 @@ CREATE TABLE IF NOT EXISTS signals (
     ofi_score           DECIMAL(8, 4),   -- Order flow imbalance [-1, 1]
     hours_to_resolution INTEGER,         -- Hours from trade to market end_date
     market_concentration DECIMAL(5, 4),  -- Fraction of wallet's recent 50 trades on this market
+    -- Detection improvements (sprint 5)
+    coordination_wallet_count INTEGER DEFAULT 0,     -- Distinct wallets in same 5-min window
+    liquidity_cliff     BOOLEAN DEFAULT FALSE,        -- Spread widened >30% in 10 min before trade
     created_at          TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -190,6 +193,81 @@ FROM trades
 WHERE timestamp >= CURRENT_TIMESTAMP - INTERVAL '24 hours'
 GROUP BY 1, 2;
 
+-- 5-minute volume per market (for fine-grained Z-score detection)
+-- Uses epoch arithmetic: floor(epoch / 300) * 300 → 5-min bucket boundary
+CREATE OR REPLACE VIEW v_5m_volume AS
+SELECT
+    market_id,
+    to_timestamp(FLOOR(epoch(timestamp) / 300) * 300) AS bucket_5m,
+    COUNT(*) AS trade_count,
+    SUM(size_usd) AS volume_usd,
+    COUNT(DISTINCT wallet) AS unique_wallets
+FROM trades
+WHERE timestamp >= CURRENT_TIMESTAMP - INTERVAL '2 hours'
+GROUP BY 1, 2;
+
+-- Modified Z-Score on 5-minute buckets (mirrors v_volume_anomalies logic)
+CREATE OR REPLACE VIEW v_volume_anomalies_5m AS
+WITH market_stats AS (
+    SELECT
+        market_id,
+        PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY volume_usd) AS median_vol
+    FROM v_5m_volume
+    GROUP BY 1
+),
+market_mad AS (
+    SELECT
+        v.market_id,
+        PERCENTILE_CONT(0.5) WITHIN GROUP (
+            ORDER BY ABS(v.volume_usd - ms.median_vol)
+        ) AS mad_vol
+    FROM v_5m_volume v
+    JOIN market_stats ms ON v.market_id = ms.market_id
+    GROUP BY 1
+)
+SELECT
+    v.market_id,
+    v.bucket_5m AS hour_bucket,
+    v.volume_usd,
+    v.trade_count,
+    v.unique_wallets,
+    ms.median_vol,
+    mm.mad_vol,
+    CASE
+        WHEN mm.mad_vol > 0
+        THEN 0.6745 * (v.volume_usd - ms.median_vol) / mm.mad_vol
+        ELSE 0
+    END AS modified_z_score
+FROM v_5m_volume v
+JOIN market_stats ms ON v.market_id = ms.market_id
+JOIN market_mad mm ON v.market_id = mm.market_id;
+
+-- Coordination signals: ≥3 distinct wallets trading same market+side in a 5-min window
+CREATE OR REPLACE VIEW v_coordination_signals AS
+SELECT
+    market_id,
+    side,
+    to_timestamp(FLOOR(epoch(timestamp) / 300) * 300) AS window_start,
+    COUNT(DISTINCT wallet) AS wallet_count,
+    SUM(size_usd) AS collective_volume_usd
+FROM trades
+WHERE timestamp >= CURRENT_TIMESTAMP - INTERVAL '10 minutes'
+GROUP BY 1, 2, 3
+HAVING COUNT(DISTINCT wallet) >= 3;
+
+-- Order book snapshots (best bid/ask every ~30s, for liquidity cliff detection)
+CREATE TABLE IF NOT EXISTS book_snapshots (
+    market_id   VARCHAR NOT NULL,
+    asset_id    VARCHAR NOT NULL,
+    ts          TIMESTAMP NOT NULL,
+    best_bid    DECIMAL(10, 6),
+    best_ask    DECIMAL(10, 6),
+    PRIMARY KEY (market_id, ts)
+);
+
+CREATE INDEX IF NOT EXISTS idx_book_snapshots_market_ts
+    ON book_snapshots (market_id, ts);
+
 -- Wallet performance on resolved markets
 CREATE OR REPLACE VIEW v_wallet_performance AS
 SELECT
@@ -272,6 +350,16 @@ def init_schema(db_path: Path | None = None) -> duckdb.DuckDBPyConnection:
     if "market_concentration" not in sig_cols:
         conn.execute("ALTER TABLE signals ADD COLUMN market_concentration DECIMAL(5, 4)")
         logger.info("Migration: added 'market_concentration' column to signals table")
+
+    # v005: coordination wallet count
+    if "coordination_wallet_count" not in sig_cols:
+        conn.execute("ALTER TABLE signals ADD COLUMN coordination_wallet_count INTEGER DEFAULT 0")
+        logger.info("Migration: added 'coordination_wallet_count' column to signals table")
+
+    # v006: liquidity cliff flag
+    if "liquidity_cliff" not in sig_cols:
+        conn.execute("ALTER TABLE signals ADD COLUMN liquidity_cliff BOOLEAN DEFAULT FALSE")
+        logger.info("Migration: added 'liquidity_cliff' column to signals table")
 
     logger.info("Schema initialized successfully")
 

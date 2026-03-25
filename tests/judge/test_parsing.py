@@ -4,11 +4,8 @@ from __future__ import annotations
 
 import json
 
-import pytest
-
 from sentinel.judge.classifier import parse_classification
 from sentinel.judge.reasoner import parse_reasoning
-
 
 # ── Tier 1 parsing ──────────────────────────────────────────────────────────
 

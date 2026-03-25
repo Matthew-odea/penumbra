@@ -10,11 +10,10 @@ Two primary event types flow through the pipeline:
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
 from typing import Union
-
 
 # ── Trade ────────────────────────────────────────────────────────────────────
 

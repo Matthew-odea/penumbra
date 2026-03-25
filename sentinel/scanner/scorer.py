@@ -57,6 +57,10 @@ class Signal:
     hours_to_resolution: int | None = None  # Hours from trade to market end_date
     market_concentration: float = 0.0    # Fraction of wallet's recent trades on this market
 
+    # Detection improvements (sprint 5)
+    coordination_wallet_count: int = 0   # Distinct wallets in same 5-min window (≥3 = coordinated)
+    liquidity_cliff: bool = False        # Spread widened >30% in 10 min before trade
+
     def as_db_tuple(self) -> tuple:
         """Return a tuple matching the DuckDB ``signals`` INSERT order."""
         return (
@@ -80,6 +84,8 @@ class Signal:
             self.ofi_score,
             self.hours_to_resolution,
             self.market_concentration,
+            self.coordination_wallet_count,
+            self.liquidity_cliff,
             self.created_at,
         )
 
@@ -117,6 +123,10 @@ def compute_statistical_score(
     ofi_score: float | None = None,
     hours_to_resolution: int | None = None,
     market_concentration: float = 0.0,
+    wallet_total_trades: int | None = None,
+    size_usd: float | None = None,
+    liquidity_cliff: bool = False,
+    coordination_wallet_count: int = 0,
 ) -> int:
     """Weighted composite score (0-100) for passing to the Judge.
 
@@ -174,12 +184,36 @@ def compute_statistical_score(
     elif market_concentration >= 0.5:
         score += 5
 
-    # ── Funding anomaly (0–w_fun points) ──────────────────────────────────
+    # ── Funding anomaly — tiered decay over 72h (0–w_fun points) ─────────
     if funding_anomaly:
-        if funding_age_minutes is not None and funding_age_minutes < 15:
-            score += w_fun
-        elif funding_age_minutes is not None and funding_age_minutes < 60:
-            score += w_fun // 2
+        if funding_age_minutes is not None:
+            age_h = funding_age_minutes / 60.0
+            if funding_age_minutes < 15:
+                funding_pts = w_fun                        # 20 pts
+            elif funding_age_minutes < 60:
+                funding_pts = int(w_fun * 0.75)            # 15 pts
+            elif age_h < 6:
+                funding_pts = int(w_fun * 0.50)            # 10 pts
+            elif age_h < 24:
+                funding_pts = int(w_fun * 0.25)            # 5 pts
+            elif age_h < 72:
+                funding_pts = max(1, int(w_fun * 0.10))    # 2 pts
+            else:
+                funding_pts = 0
+            score += funding_pts
+        else:
+            score += max(1, w_fun // 4)  # age unknown, apply minimum signal
+
+    # ── Zero-history suspicion bonus ──────────────────────────────────────
+    # Unknown wallet + large trade is inherently suspicious.
+    large_threshold = settings.min_trade_size_usd * settings.new_wallet_large_trade_multiplier
+    if (
+        wallet_total_trades is not None
+        and wallet_total_trades == 0
+        and size_usd is not None
+        and size_usd > large_threshold
+    ):
+        score += 5
 
     # ── Time-to-resolution urgency multiplier ────────────────────────────
     # Trades closest to resolution contain the most information (Kyle 1985)
@@ -188,6 +222,18 @@ def compute_statistical_score(
             score = int(score * 1.4)
         elif hours_to_resolution < 72:
             score = int(score * 1.2)
+
+    # ── Liquidity cliff multiplier ────────────────────────────────────────
+    # Market makers withdrawing liquidity before a trade is a classic insider tell.
+    if liquidity_cliff:
+        score = int(score * 1.2)
+
+    # ── Coordination multiplier ───────────────────────────────────────────
+    # Multiple wallets trading same side in a 5-min window raises suspicion.
+    # Dampened if volume Z-score already fired (to reduce double-counting).
+    if coordination_wallet_count >= settings.coordination_wallet_count_min:
+        coord_mult = 1.15 if z_score > threshold else 1.3
+        score = int(score * coord_mult)
 
     return min(100, score)
 
@@ -215,6 +261,8 @@ def build_signal(
     ofi_score: float | None = None,
     hours_to_resolution: int | None = None,
     market_concentration: float = 0.0,
+    coordination_wallet_count: int = 0,
+    liquidity_cliff: bool = False,
 ) -> Signal:
     """Construct a scored ``Signal`` from individual metrics."""
     stat_score = compute_statistical_score(
@@ -228,6 +276,10 @@ def build_signal(
         ofi_score=ofi_score,
         hours_to_resolution=hours_to_resolution,
         market_concentration=market_concentration,
+        wallet_total_trades=wallet_total_trades,
+        size_usd=size_usd,
+        liquidity_cliff=liquidity_cliff,
+        coordination_wallet_count=coordination_wallet_count,
     )
 
     return Signal(
@@ -250,6 +302,8 @@ def build_signal(
         ofi_score=ofi_score,
         hours_to_resolution=hours_to_resolution,
         market_concentration=market_concentration,
+        coordination_wallet_count=coordination_wallet_count,
+        liquidity_cliff=liquidity_cliff,
         statistical_score=stat_score,
         created_at=datetime.now(tz=UTC),
     )
@@ -263,8 +317,9 @@ INSERT OR IGNORE INTO signals (
     trade_timestamp, volume_z_score, modified_z_score, price_impact,
     wallet_win_rate, wallet_total_trades, is_whitelisted,
     funding_anomaly, funding_age_minutes, statistical_score,
-    ofi_score, hours_to_resolution, market_concentration, created_at
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ofi_score, hours_to_resolution, market_concentration,
+    coordination_wallet_count, liquidity_cliff, created_at
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 """
 
 

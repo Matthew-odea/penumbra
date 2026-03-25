@@ -339,7 +339,7 @@ async def accuracy() -> list[dict]:
             "informed_count": informed,
             "noise_count": r[6] or 0,
             "correct_informed": correct,
-            "accuracy_pct": round((correct / informed * 100)) if informed > 0 else None,
+            "accuracy_pct": round(correct / informed * 100) if informed > 0 else None,
         })
     return result
 

@@ -17,14 +17,20 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
-import sys
+import time
 
 import structlog
 
 from sentinel.config import settings
 from sentinel.db.init import init_schema
 from sentinel.ingester.listener import Listener
-from sentinel.ingester.markets import sync_markets, fetch_active_asset_ids, fetch_active_markets, fetch_market_by_id, get_all_condition_ids, upsert_markets
+from sentinel.ingester.markets import (
+    fetch_active_markets,
+    fetch_market_by_id,
+    get_all_condition_ids,
+    sync_markets,
+    upsert_markets,
+)
 from sentinel.ingester.models import BookEvent, Trade
 from sentinel.ingester.poller import TradePoller
 from sentinel.ingester.writer import BatchWriter
@@ -79,11 +85,11 @@ async def _periodic_market_sync(conn: object, interval_hours: int) -> None:
 
 
 async def _periodic_status(
-    writer: "BatchWriter",
-    listener: "Listener",
-    poller: "TradePoller",
-    scanner: "Scanner | None",
-    judge: "Judge | None",
+    writer: BatchWriter,
+    listener: Listener,
+    poller: TradePoller,
+    scanner: Scanner | None,
+    judge: Judge | None,
     interval: int = 30,
 ) -> None:
     """Print a single aggregate status line every *interval* seconds."""
@@ -166,8 +172,10 @@ async def run_ingester(
                     await _unknown_market_queue.put(trade.market_id)
         await writer.add(trade)
 
-    # Book event handler — forward to scanner queue (no DB persistence)
+    # Book event handler — forward to scanner queue + persist snapshots
     book_event_count = 0
+    _last_snapshot: dict[str, float] = {}  # market_id → monotonic time of last write
+    _SNAPSHOT_INTERVAL = 30.0              # persist at most once per 30s per market
 
     async def _on_book_event(evt: BookEvent) -> None:
         nonlocal book_event_count
@@ -176,6 +184,27 @@ async def run_ingester(
             print(json.dumps(evt.as_dict()))
         if scanner_queue is not None:
             await scanner_queue.put([evt])
+
+        # Persist best_bid/best_ask snapshot for liquidity cliff detection
+        if not dry_run and conn is not None:
+            now = time.monotonic()
+            if now - _last_snapshot.get(evt.market_id, 0) >= _SNAPSHOT_INTERVAL:
+                _last_snapshot[evt.market_id] = now
+                try:
+                    conn.execute(
+                        "INSERT OR IGNORE INTO book_snapshots"
+                        " (market_id, asset_id, ts, best_bid, best_ask)"
+                        " VALUES (?, ?, ?, ?, ?)",
+                        [
+                            evt.market_id,
+                            evt.asset_id,
+                            evt.timestamp,
+                            float(evt.best_bid),
+                            float(evt.best_ask),
+                        ],
+                    )
+                except Exception as exc:
+                    logger.debug("Book snapshot write failed", market=evt.market_id, error=str(exc))
 
     # ── Resolve asset IDs + condition IDs ────────────────────────────────
     condition_ids: list[str] = []

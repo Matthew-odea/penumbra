@@ -21,18 +21,14 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
-import sys
-from datetime import UTC, datetime
 from typing import Any
 
 import structlog
 
 from sentinel.config import settings
 from sentinel.db.init import init_schema
-from sentinel.ingester.models import Trade
 from sentinel.scanner.funding import check_funding_anomaly
-from sentinel.scanner.price_impact import get_high_impact_trades
-from sentinel.scanner.scorer import Signal, build_signal, write_signal
+from sentinel.scanner.scorer import build_signal, write_signal
 from sentinel.scanner.volume import get_anomalies, get_zscore_for_market
 from sentinel.scanner.wallet_profiler import get_wallet_profile, get_whitelisted_wallets
 
@@ -185,7 +181,7 @@ def _show_anomalies(conn: Any) -> None:
         flag = "⚠️ " if a.modified_z_score >= settings.zscore_threshold else "  "
         print(
             f"{a.market_id[:14]:<16} "
-            f"{str(a.hour_bucket):<20} "
+            f"{a.hour_bucket!s:<20} "
             f"${a.volume_usd:<11,.0f} "
             f"{a.trade_count:<8} "
             f"{a.modified_z_score:<10.2f} "

@@ -3,7 +3,6 @@
 import asyncio
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
-from unittest.mock import patch
 
 import duckdb
 import pytest
