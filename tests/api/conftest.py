@@ -32,11 +32,11 @@ def _seed(conn: duckdb.DuckDBPyConnection) -> None:
         """
         INSERT INTO markets VALUES
             ('mkt-001', 'Will Bitcoin exceed $100k by June?', 'btc-100k',
-             'Crypto', ?, 5500000.0, 1200000.0, TRUE, FALSE, NULL, ?),
+             'Crypto', ?, 5500000.0, 1200000.0, TRUE, FALSE, NULL, ?, NULL, NULL, NULL),
             ('mkt-002', 'Will the Fed cut rates in Q3?', 'fed-cut-q3',
-             'Politics', ?, 8200000.0, 3100000.0, TRUE, FALSE, NULL, ?),
+             'Politics', ?, 8200000.0, 3100000.0, TRUE, FALSE, NULL, ?, NULL, NULL, NULL),
             ('mkt-003', 'Resolved test market', 'resolved-mkt',
-             'Science', ?, 200000.0, 50000.0, FALSE, TRUE, 1.0, ?)
+             'Science', ?, 200000.0, 50000.0, FALSE, TRUE, 1.0, ?, NULL, NULL, NULL)
         """,
         [
             now + timedelta(days=60), now,

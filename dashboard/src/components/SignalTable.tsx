@@ -82,17 +82,31 @@ export default function SignalTable({ signals }: Props) {
 
                   {/* Market */}
                   <td className="py-2 px-3 max-w-[280px]">
-                    <button
-                      onClick={(e) => { e.stopPropagation(); navigate(`/market/${s.market_id}`) }}
-                      className="text-left hover:text-accent transition-colors truncate block max-w-full"
-                      title={s.market_question ?? s.market_id}
-                    >
-                      {s.market_question
-                        ? s.market_question.length > 50
-                          ? s.market_question.slice(0, 50) + '…'
-                          : s.market_question
-                        : s.market_id.slice(0, 12) + '…'}
-                    </button>
+                    <div className="flex items-center gap-1.5">
+                      <button
+                        onClick={(e) => { e.stopPropagation(); navigate(`/market/${s.market_id}`) }}
+                        className="text-left hover:text-accent transition-colors truncate"
+                        title={s.market_question ?? s.market_id}
+                      >
+                        {s.market_question
+                          ? s.market_question.length > 48
+                            ? s.market_question.slice(0, 48) + '…'
+                            : s.market_question
+                          : s.market_id.slice(0, 12) + '…'}
+                      </button>
+                      {s.attractiveness_score !== null && s.attractiveness_score !== undefined && (
+                        <span
+                          className={`shrink-0 inline-block px-1 py-0 rounded-sm font-mono text-[9px] font-medium ${
+                            s.attractiveness_score >= 80 ? 'bg-red-500/20 text-red-400' :
+                            s.attractiveness_score >= 60 ? 'bg-amber-500/20 text-amber-400' :
+                            'bg-surface-3 text-neutral-500'
+                          }`}
+                          title={s.attractiveness_reason ?? undefined}
+                        >
+                          {s.attractiveness_score}
+                        </span>
+                      )}
+                    </div>
                     {s.category && (
                       <span className="text-[10px] text-neutral-600">{s.category}</span>
                     )}
@@ -178,6 +192,14 @@ export default function SignalTable({ signals }: Props) {
 
                         {/* Right: Metadata */}
                         <div className="space-y-3">
+                          {s.attractiveness_reason && (
+                            <div>
+                              <div className="text-[10px] uppercase tracking-wider text-neutral-500 mb-1">
+                                Why We Watched
+                              </div>
+                              <p className="text-neutral-400">{s.attractiveness_reason}</p>
+                            </div>
+                          )}
                           {s.key_evidence && (
                             <div>
                               <div className="text-[10px] uppercase tracking-wider text-neutral-500 mb-1">

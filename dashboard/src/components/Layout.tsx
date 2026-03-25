@@ -10,8 +10,6 @@ export default function Layout() {
 
   const t1Used = budget?.tier1.calls_used ?? 0
   const t1Limit = budget?.tier1.calls_limit ?? 200
-  const t2Used = budget?.tier2.calls_used ?? 0
-  const t2Limit = budget?.tier2.calls_limit ?? 30
 
   return (
     <div className="min-h-screen flex flex-col">
@@ -26,18 +24,18 @@ export default function Layout() {
 
           {/* Nav */}
           <nav className="flex items-center gap-1">
-            <NavItem to="/" label="Feed" active={location.pathname === '/'} />
-            <NavItem to="/metrics" label="Metrics" active={location.pathname === '/metrics'} />
+            <NavItem to="/" label="Signals" active={location.pathname === '/'} />
+            <NavItem to="/watchlist" label="Watchlist" active={location.pathname === '/watchlist'} />
+            <NavItem to="/markets" label="Markets" active={location.pathname === '/markets'} />
             <NavItem to="/wallets" label="Wallets" active={location.pathname === '/wallets'} />
+            <NavItem to="/metrics" label="Metrics" active={location.pathname === '/metrics'} />
           </nav>
         </div>
 
-        {/* Right: Budget + Status */}
+        {/* Right: T1 budget + status */}
         <div className="flex items-center gap-4 text-xs">
           <div className="flex items-center gap-3 font-mono text-neutral-500">
             <span>T1 {t1Used}/{t1Limit}</span>
-            <span className="text-border">|</span>
-            <span>T2 {t2Used}/{t2Limit}</span>
           </div>
 
           <div className="flex items-center gap-1.5">

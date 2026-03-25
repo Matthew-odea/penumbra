@@ -35,6 +35,9 @@ export interface Signal {
   market_question: string | null
   category: string | null
   market_liquidity: number | null
+  // Market intelligence
+  attractiveness_score: number | null
+  attractiveness_reason: string | null
 }
 
 export interface SignalStats {
@@ -50,7 +53,13 @@ export interface Market {
   volume_usd: number | null
   liquidity_usd: number | null
   active: boolean
+  resolved: boolean
   end_date: string | null
+  last_price: number | null
+  attractiveness_score: number | null
+  attractiveness_reason: string | null
+  hours_to_resolution: number | null
+  tier: 'hot' | 'scored' | 'unscored'
   signal_count: number
   last_signal_at: string | null
 }
@@ -65,6 +74,28 @@ export interface MarketDetail {
   resolved: boolean
   resolved_price: number | null
   end_date: string | null
+  last_price: number | null
+  attractiveness_score: number | null
+  attractiveness_reason: string | null
+  hours_to_resolution: number | null
+  tier: 'hot' | 'scored' | 'unscored'
+}
+
+export interface WatchlistMarket {
+  market_id: string
+  question: string
+  category: string | null
+  volume_usd: number | null
+  liquidity_usd: number | null
+  active: boolean
+  resolved: boolean
+  end_date: string | null
+  last_price: number | null
+  attractiveness_score: number
+  attractiveness_reason: string | null
+  hours_to_resolution: number | null
+  priority_score: number
+  signals_today: number
 }
 
 export interface VolumePoint {
@@ -142,6 +173,14 @@ export interface MetricsOverview {
   top_markets: TopMarket[]
   top_traded_markets: TopTradedMarket[]
   tier2_coverage: { real: number; fallback: number; total: number }
+  market_coverage: {
+    total: number
+    hot_eligible: number
+    scored: number
+    unscored: number
+    avg_hot_score: number | null
+    hot_capacity: number
+  }
 }
 
 export interface AnomalyPoint {

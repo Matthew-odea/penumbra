@@ -1,24 +1,17 @@
 """REST trade poller for Polymarket trade executions.
 
 Periodically polls ``/trades?condition_id={cid}`` on the Polymarket data-api
-for each tracked market, parses the flat trade objects into :class:`Trade`
-objects, and forwards them to the batch writer via the same callback used by
-the WS listener.
+for each market in the hot tier, parses the flat trade objects into
+:class:`Trade` objects, and forwards them to the batch writer via the same
+callback used by the WS listener.
 
-This complements the WebSocket listener: the ``/ws/market`` channel delivers
-order-book events (price_changes, snapshots) but **not** trade executions.
-The data-api ``/trades`` endpoint is the public, unauthenticated source of
-actual trade executions with wallet addresses.
+Hot tier markets are selected by the LLM attractiveness priority formula and
+refreshed every 30 minutes via ``_periodic_hot_market_refresh`` in
+``__main__.py``.
 
-Two polling tiers:
-
-* **Hot** — the top-N most active markets (from ``/sampling-markets``),
-  polled every ``trade_poll_interval_seconds`` (default 30 s).
-* **Cold** — a rotating window over *all* synced markets from the DB, polled
-  ``trade_poll_cold_batch`` markets per cycle every
-  ``trade_poll_cold_interval_seconds`` (default 60 s).  This ensures even
-  low-activity markets are checked periodically, so a whale entering an
-  obscure market isn't missed.
+Cold-tier trade polling has been removed.  Market discovery is handled
+exclusively by the periodic ``sync_markets`` job which crawls
+``/clob.polymarket.com/markets``.
 """
 
 from __future__ import annotations
@@ -46,8 +39,8 @@ _SSL_CTX.check_hostname = False
 _SSL_CTX.verify_mode = ssl.CERT_NONE
 
 # Bounded LRU seen-set to avoid reprocessing recent trades.
-# Sized to hold trade_poll_limit × (hot_markets + cold_batch) with headroom.
-# At 1000 limit × 100 markets = 100K; 200K gives 2× safety margin.
+# Sized to hold trade_poll_limit × hot_market_count with headroom.
+# At 1000 limit × 50 markets = 50K; 200K gives 4× safety margin.
 _SEEN_SET_MAX = 200_000
 
 
@@ -74,23 +67,17 @@ class _BoundedSet:
 
 
 class TradePoller:
-    """Async REST poller for Polymarket trade executions.
+    """Async REST poller for Polymarket trade executions (hot tier only).
 
-    Supports two tiers:
-
-    * **hot** — a small set of high-activity markets polled frequently.
-    * **cold** — a rotating window through *all* synced markets, polled
-      at a slower cadence so every market is eventually checked.
-
-    Both tiers share a single dedup set so trades discovered by either
-    tier are never forwarded twice.
+    Polls a curated set of high-attractiveness markets at ``poll_interval``
+    seconds.  Market selection is handled externally by the priority formula
+    and hot-swapped via ``update_markets()``.
 
     Usage::
 
         poller = TradePoller(
             on_trade=writer.add,
-            condition_ids=["0xabc...", "0xdef..."],       # hot
-            cold_condition_ids=["0x001...", "0x002..."],   # cold (all DB markets)
+            condition_ids=["0xabc...", "0xdef..."],
         )
         await poller.run()   # blocks until cancelled
     """
@@ -100,21 +87,12 @@ class TradePoller:
         *,
         on_trade: TradeCallback,
         condition_ids: list[str] | None = None,
-        cold_condition_ids: list[str] | None = None,
-        cold_batch_size: int | None = None,
-        cold_interval: int | None = None,
         poll_interval: int | None = None,
         base_url: str | None = None,
         dry_run: bool = False,
     ) -> None:
         self._on_trade = on_trade
         self._condition_ids = list(condition_ids or [])
-        self._cold_ids = list(cold_condition_ids or [])
-        self._cold_batch = cold_batch_size or settings.trade_poll_cold_batch
-        self._cold_interval = cold_interval or settings.trade_poll_cold_interval_seconds
-        self._cold_offset = 0
-        self._cold_poll_count = 0
-        self._cold_trade_count = 0
         self._poll_interval = poll_interval or settings.trade_poll_interval_seconds
         self._base_url = base_url or settings.polymarket_data_api_url
         self._dry_run = dry_run
@@ -133,108 +111,43 @@ class TradePoller:
     def poll_count(self) -> int:
         return self._poll_count
 
-    @property
-    def cold_poll_count(self) -> int:
-        return self._cold_poll_count
-
-    @property
-    def cold_trade_count(self) -> int:
-        return self._cold_trade_count
-
     def update_markets(self, condition_ids: list[str]) -> None:
-        """Hot-swap the set of hot-tier tracked markets."""
+        """Hot-swap the set of tracked markets."""
         self._condition_ids = list(condition_ids)
-        logger.info("Trade poller hot markets updated", count=len(self._condition_ids))
-
-    def update_cold_markets(self, condition_ids: list[str]) -> None:
-        """Replace the full cold-tier market list (e.g. after market sync)."""
-        # Remove any that are already in the hot set to avoid double-polling
-        hot_set = set(self._condition_ids)
-        self._cold_ids = [c for c in condition_ids if c not in hot_set]
-        self._cold_offset = 0
-        logger.info("Trade poller cold markets updated", count=len(self._cold_ids))
+        logger.info("Trade poller markets updated", count=len(self._condition_ids))
 
     def stop(self) -> None:
         self._running = False
 
     async def run(self) -> None:
-        """Run hot + cold polling loops concurrently until cancelled."""
+        """Run the polling loop until cancelled."""
         self._running = True
         logger.info(
             "Trade poller starting",
-            hot_markets=len(self._condition_ids),
-            cold_markets=len(self._cold_ids),
-            hot_interval_s=self._poll_interval,
-            cold_interval_s=self._cold_interval,
-            cold_batch=self._cold_batch,
+            markets=len(self._condition_ids),
+            interval_s=self._poll_interval,
         )
 
-        tasks = [asyncio.create_task(self._run_hot(), name="poller_hot")]
-        if self._cold_ids:
-            tasks.append(asyncio.create_task(self._run_cold(), name="poller_cold"))
-
         try:
-            await asyncio.gather(*tasks)
+            while self._running:
+                try:
+                    await self._poll_batch(self._condition_ids)
+                except asyncio.CancelledError:
+                    break
+                except Exception as exc:
+                    logger.error("Poll cycle failed", error=str(exc))
+                await asyncio.sleep(self._poll_interval)
         except asyncio.CancelledError:
             pass
-        finally:
-            for t in tasks:
-                t.cancel()
 
-    # ── hot tier ────────────────────────────────────────────────────────
+    # ── internals ───────────────────────────────────────────────────────
 
-    async def _run_hot(self) -> None:
-        """Poll hot-tier markets in a loop."""
-        while self._running:
-            try:
-                await self._poll_batch(self._condition_ids, "hot")
-            except asyncio.CancelledError:
-                break
-            except Exception as exc:
-                logger.error("Hot poll cycle failed", error=str(exc))
-            await asyncio.sleep(self._poll_interval)
-
-    # ── cold tier (rotating window) ─────────────────────────────────────
-
-    async def _run_cold(self) -> None:
-        """Poll a rotating slice of cold-tier markets in a loop."""
-        while self._running:
-            try:
-                batch = self._next_cold_batch()
-                if batch:
-                    await self._poll_batch(batch, "cold")
-            except asyncio.CancelledError:
-                break
-            except Exception as exc:
-                logger.error("Cold poll cycle failed", error=str(exc))
-            await asyncio.sleep(self._cold_interval)
-
-    def _next_cold_batch(self) -> list[str]:
-        """Return the next slice of cold markets and advance the offset."""
-        if not self._cold_ids:
-            return []
-        start = self._cold_offset
-        end = start + self._cold_batch
-        batch = self._cold_ids[start:end]
-        # Wrap around if we've gone past the end
-        if end >= len(self._cold_ids):
-            self._cold_offset = 0
-        else:
-            self._cold_offset = end
-        return batch
-
-    # ── shared internals ────────────────────────────────────────────────
-
-    async def _poll_batch(self, condition_ids: list[str], tier: str) -> None:
+    async def _poll_batch(self, condition_ids: list[str]) -> None:
         """Poll a list of markets in parallel (bounded concurrency)."""
         if not condition_ids:
             return
 
-        if tier == "hot":
-            self._poll_count += 1
-        else:
-            self._cold_poll_count += 1
-
+        self._poll_count += 1
         sem = asyncio.Semaphore(10)
 
         async with httpx.AsyncClient(verify=False, timeout=15) as client:
@@ -242,10 +155,8 @@ class TradePoller:
                 async with sem:
                     return await self._poll_market(cid, client)
 
-            # Fire in chunks of 10 with a small inter-chunk delay to stay
-            # under Polymarket's rate limit (~50 req/s).  Without this,
-            # asyncio.gather releases all tasks at once and the semaphore
-            # only limits concurrency, not the burst rate seen by the server.
+            # Fire in chunks of 10 with a 200ms inter-chunk delay (~25 req/s).
+            # With hot tier at 50 markets this stays well under rate limits.
             chunk_size = 10
             results: list[tuple[int, int] | BaseException] = []
             for i in range(0, len(condition_ids), chunk_size):
@@ -256,19 +167,15 @@ class TradePoller:
                 )
                 results.extend(chunk_results)
                 if i + chunk_size < len(condition_ids):
-                    await asyncio.sleep(0.2)  # 200ms between chunks → ~25 req/s
+                    await asyncio.sleep(0.2)
 
         new_trades = sum(r[0] for r in results if isinstance(r, tuple))
         total_fetched = sum(r[1] for r in results if isinstance(r, tuple))
         errors = sum(1 for r in results if isinstance(r, Exception))
         dedup = total_fetched - new_trades
 
-        if tier == "cold":
-            self._cold_trade_count += new_trades
-
         logger.info(
             "poll_cycle",
-            tier=tier,
             new=new_trades,
             fetched=total_fetched,
             dedup=dedup,
@@ -279,14 +186,14 @@ class TradePoller:
 
     # kept for backward compatibility (tests)
     async def _poll_all(self) -> None:
-        await self._poll_batch(self._condition_ids, "hot")
+        await self._poll_batch(self._condition_ids)
 
     async def _poll_market(
         self, condition_id: str, client: httpx.AsyncClient
     ) -> tuple[int, int]:
-        """Fetch and process trades for a single market from the data-api.
+        """Fetch and process trades for a single market.
 
-        Returns (new_count, total_fetched) — total_fetched includes deduped trades.
+        Returns (new_count, total_fetched).
         """
         url = f"{self._base_url}/trades"
         new_count = 0
@@ -321,7 +228,6 @@ class TradePoller:
 
                 total_fetched += 1
 
-                # Dedup: skip if we've already seen this trade
                 if trade.trade_id in self._seen:
                     continue
 

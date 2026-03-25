@@ -24,22 +24,11 @@ class Settings(BaseSettings):
     polymarket_ws_url: str = "wss://ws-subscriptions-clob.polymarket.com/ws/market"
     polymarket_rest_url: str = "https://clob.polymarket.com"
     polymarket_data_api_url: str = "https://data-api.polymarket.com"
-    # TODO: Replace with real Polymarket tags once live-tested.
-    #       Run `python -m sentinel.ingester --dry-run --timeout 30` and check
-    #       the actual tag values returned by the /markets endpoint.
-    #       Known real tags: Movies, Culture, Courts, Sports, Politics, Crypto, etc.
-    polymarket_categories: str = "Biotech,Politics,Crypto,Science"
-
     # L2 auth — set via `python scripts/setup_l2.py`
     polymarket_private_key: str = ""
     polymarket_api_key: str = ""
     polymarket_api_secret: str = ""
     polymarket_api_passphrase: str = ""
-
-    @property
-    def categories_list(self) -> list[str]:
-        """Parse comma-separated categories into a list."""
-        return [s.strip() for s in self.polymarket_categories.split(",") if s.strip()]
 
     # ── DuckDB ──────────────────────────────────────────────────────────────
     duckdb_path: Path = Path("data/sentinel.duckdb")
@@ -101,15 +90,18 @@ class Settings(BaseSettings):
             raise ValueError(f"Scorer weights must sum to 100, got {total}")
         return self
 
+    # ── Market Intelligence ──────────────────────────────────────────────────
+    hot_market_count: int = 50                  # Size of hot polling tier
+    hot_market_min_score: int = 60              # Attractiveness threshold for hot tier
+    hot_market_min_liquidity: float = 5000.0    # Hard floor to exclude micro-markets
+    hot_market_refresh_interval_seconds: int = 1800  # 30 min
+
     # ── Ingester ────────────────────────────────────────────────────────────
     ingester_batch_size: int = 20
     ingester_flush_interval_seconds: int = 1
     coordination_wallet_count_min: int = 3  # min distinct wallets to flag coordination
-    market_sync_interval_hours: int = 6
+    market_sync_interval_hours: int = 2     # Sync all markets every 2h (was 6h)
     trade_poll_interval_seconds: int = 5
-    trade_poll_max_markets: int = 1000
-    trade_poll_cold_batch: int = 50
-    trade_poll_cold_interval_seconds: int = 60
     trade_poll_limit: int = 1000
 
     # ── FastAPI ─────────────────────────────────────────────────────────────

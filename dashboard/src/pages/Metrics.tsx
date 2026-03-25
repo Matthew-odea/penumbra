@@ -66,6 +66,8 @@ export default function Metrics() {
 
   const t2CovPct = t2cov.total > 0 ? Math.round((t2cov.real / t2cov.total) * 100) : null
 
+  const coverage = overview?.market_coverage
+
   return (
     <div className="px-5 py-4 space-y-5 max-w-[1600px] mx-auto">
       {/* ── Header + Range Selector ──────────────────────────────── */}
@@ -227,6 +229,44 @@ export default function Metrics() {
                 <Area type="monotone" dataKey="trades" stroke="#3b82f6" fill="#1e3a5f" name="Trades" />
               </AreaChart>
             </ResponsiveContainer>
+          </div>
+        </div>
+      )}
+
+      {/* ── Market Coverage ───────────────────────────────────────── */}
+      {coverage && (
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+          <IngestionCard
+            label="Total Markets"
+            value={coverage.total}
+            sub="discovered on Polymarket"
+          />
+          <div className="bg-surface-1 border border-border-subtle rounded-sm px-4 py-3">
+            <div className="text-[11px] uppercase tracking-wider text-neutral-500 mb-1">Hot Tier</div>
+            <div className="font-mono text-lg font-medium text-red-400">
+              {coverage.hot_eligible ?? coverage.scored}
+              <span className="text-neutral-600 text-sm font-normal"> / {coverage.hot_capacity}</span>
+            </div>
+            <div className="text-[11px] text-neutral-600 mt-0.5">eligible / capacity</div>
+          </div>
+          <div className="bg-surface-1 border border-border-subtle rounded-sm px-4 py-3">
+            <div className="text-[11px] uppercase tracking-wider text-neutral-500 mb-1">Scored</div>
+            <div className="font-mono text-lg font-medium text-neutral-100">{coverage.scored}</div>
+            {coverage.unscored > 0 && (
+              <div className="text-[11px] text-amber-600 mt-0.5">{coverage.unscored} pending…</div>
+            )}
+          </div>
+          <div className="bg-surface-1 border border-border-subtle rounded-sm px-4 py-3">
+            <div className="text-[11px] uppercase tracking-wider text-neutral-500 mb-1">Avg Attractiveness</div>
+            <div className={`font-mono text-lg font-medium ${
+              (coverage.avg_hot_score ?? 0) >= 80 ? 'text-red-400' :
+              (coverage.avg_hot_score ?? 0) >= 60 ? 'text-amber-400' :
+              'text-neutral-100'
+            }`}>
+              {coverage.avg_hot_score != null ? coverage.avg_hot_score : '—'}
+              {coverage.avg_hot_score != null && <span className="text-neutral-600 text-sm font-normal"> / 100</span>}
+            </div>
+            <div className="text-[11px] text-neutral-600 mt-0.5">hot-tier average</div>
           </div>
         </div>
       )}

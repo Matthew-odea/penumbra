@@ -37,17 +37,17 @@ def _full_db() -> duckdb.DuckDBPyConnection:
 
     # Markets
     conn.execute(
-        "INSERT INTO markets VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+        "INSERT INTO markets VALUES (?,?,?,?,?,?,?,?,?,?,?,NULL,NULL,NULL)",
         ["mkt-btc", "Will BTC exceed $100k by June?", "btc-100k", "Crypto",
          now + timedelta(days=60), 5500000.0, 1200000.0, True, False, None, now],
     )
     conn.execute(
-        "INSERT INTO markets VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+        "INSERT INTO markets VALUES (?,?,?,?,?,?,?,?,?,?,?,NULL,NULL,NULL)",
         ["mkt-fed", "Will the Fed cut rates in Q3?", "fed-cut-q3", "Politics",
          now + timedelta(days=90), 8200000.0, 3100000.0, True, False, None, now],
     )
     conn.execute(
-        "INSERT INTO markets VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+        "INSERT INTO markets VALUES (?,?,?,?,?,?,?,?,?,?,?,NULL,NULL,NULL)",
         ["mkt-resolved", "Resolved test market", "resolved-mkt", "Science",
          now - timedelta(days=10), 200000.0, 50000.0, False, True, 1.0, now],
     )

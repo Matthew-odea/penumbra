@@ -1,7 +1,11 @@
 """Market metadata synchronisation from Polymarket REST API.
 
-Fetches all active markets via the CLOB ``/markets`` endpoint, filters to
-configured categories, and upserts into the DuckDB ``markets`` table.
+Fetches ALL active markets via the CLOB ``/markets`` endpoint (no category
+filter — attractiveness scoring replaces category-based filtering) and upserts
+into the DuckDB ``markets`` table.
+
+Also provides ``get_priority_market_ids()`` which ranks DB markets by the
+informed-trading priority formula for use by the hot-tier poller.
 """
 
 from __future__ import annotations
@@ -26,23 +30,67 @@ _SSL_CTX = ssl.create_default_context()
 _SSL_CTX.check_hostname = False
 _SSL_CTX.verify_mode = ssl.CERT_NONE
 
+# ── Priority scoring SQL ──────────────────────────────────────────────────────
+# Weights mirrors the plan:
+#   (attractiveness / 100) × time_weight × uncertainty × liquidity_scaling
+# epoch() returns unix seconds in DuckDB.
+
+_PRIORITY_SQL = """
+SELECT market_id
+FROM markets
+WHERE active = true
+  AND resolved = false
+  AND end_date > CURRENT_TIMESTAMP
+  AND liquidity_usd >= ?
+  AND attractiveness_score IS NOT NULL
+  AND attractiveness_score >= ?
+ORDER BY
+    (attractiveness_score / 100.0)
+    * CASE
+        WHEN epoch(end_date) - epoch(CURRENT_TIMESTAMP) < 86400    THEN 1.0
+        WHEN epoch(end_date) - epoch(CURRENT_TIMESTAMP) < 259200   THEN 0.9
+        WHEN epoch(end_date) - epoch(CURRENT_TIMESTAMP) < 604800   THEN 0.8
+        WHEN epoch(end_date) - epoch(CURRENT_TIMESTAMP) < 1209600  THEN 0.65
+        WHEN epoch(end_date) - epoch(CURRENT_TIMESTAMP) < 2592000  THEN 0.5
+        WHEN epoch(end_date) - epoch(CURRENT_TIMESTAMP) < 7776000  THEN 0.35
+        WHEN epoch(end_date) - epoch(CURRENT_TIMESTAMP) < 15552000 THEN 0.2
+        ELSE 0.1
+      END
+    * (1.0 - ABS(COALESCE(last_price, 0.5) - 0.5) * 2.0)
+    * LEAST(liquidity_usd, 500000.0) / 500000.0
+DESC
+LIMIT ?
+"""
+
+# Fallback when insufficient scored markets exist: top by liquidity
+_FALLBACK_SQL = """
+SELECT market_id
+FROM markets
+WHERE active = true
+  AND resolved = false
+  AND end_date > CURRENT_TIMESTAMP
+  AND liquidity_usd >= ?
+ORDER BY liquidity_usd DESC
+LIMIT ?
+"""
+
 
 async def fetch_all_markets(
     *,
     base_url: str | None = None,
-    categories: list[str] | None = None,
 ) -> list[dict[str, Any]]:
-    """Page through ``/markets`` and return active markets.
+    """Page through ``/markets`` and return ALL active markets.
+
+    No category filter — all active, non-closed, non-archived markets are
+    returned.  The LLM attractiveness scorer decides which are worth watching.
 
     Args:
         base_url: Override for the REST URL (tests / dry-run).
-        categories: Category allow-list.  ``None`` means accept all.
 
     Returns:
         List of raw market dicts from the API.
     """
     url = base_url or settings.polymarket_rest_url
-    cats = {c.lower() for c in (categories or settings.categories_list)}
     cursor = "MA=="
     markets: list[dict[str, Any]] = []
     page = 0
@@ -58,18 +106,11 @@ async def fetch_all_markets(
             page += 1
 
             for m in body.get("data", []):
-                # Basic active filter
                 if not m.get("active") or m.get("closed") or m.get("archived"):
-                    continue
-                # Category filter — Polymarket uses "tags" list
-                raw_tags = m.get("tags") or []
-                tags = [t.lower() for t in raw_tags if isinstance(t, str)]
-                if cats and not any(t in cats for t in tags):
                     continue
                 markets.append(m)
 
             cursor = body.get("next_cursor")
-            # Log progress every 100 pages instead of every page
             if page % 100 == 0:
                 logger.info("Market sync progress", page=page, found=len(markets))
 
@@ -86,11 +127,24 @@ def _parse_end_date(raw: str | None) -> datetime | None:
         return None
 
 
+def _extract_yes_price(tokens: list[dict[str, Any]]) -> float | None:
+    """Extract the YES token price (current market probability) from tokens array."""
+    for token in tokens:
+        if isinstance(token, dict) and str(token.get("outcome", "")).lower() == "yes":
+            raw = token.get("price")
+            if raw is not None:
+                try:
+                    return float(raw)
+                except (TypeError, ValueError):
+                    pass
+    return None
+
+
 def upsert_markets(conn: Any, markets: list[dict[str, Any]]) -> int:
     """Upsert market metadata into DuckDB.
 
-    Uses DELETE + INSERT because DuckDB doesn't support ``ON CONFLICT UPDATE``
-    with all column types elegantly.  This is fine for metadata refreshes.
+    Preserves existing ``attractiveness_score`` and ``attractiveness_reason``
+    so the LLM scoring is not overwritten on every sync.
 
     Returns the number of rows upserted.
     """
@@ -100,7 +154,9 @@ def upsert_markets(conn: Any, markets: list[dict[str, Any]]) -> int:
     rows = []
     for m in markets:
         tokens = m.get("tokens") or []
-        volume = sum(float(t.get("price", 0)) for t in tokens) if tokens else 0.0
+        last_price = _extract_yes_price(tokens)
+        resolved = bool(m.get("closed", False))
+
         rows.append((
             str(m["condition_id"]),
             m.get("question", ""),
@@ -109,20 +165,40 @@ def upsert_markets(conn: Any, markets: list[dict[str, Any]]) -> int:
             _parse_end_date(m.get("end_date_iso")),
             float(m.get("volume", 0) or 0),
             float(m.get("liquidity", 0) or 0),
-            True,  # active
+            True,   # active
+            resolved,
+            last_price,
             datetime.now(UTC),
         ))
 
-    # Batch DELETE + INSERT inside a transaction
     market_ids = [r[0] for r in rows]
     placeholders = ",".join(["?"] * len(market_ids))
+
+    # Delete + re-insert but preserve attractiveness scores
+    # We use a temp table approach: read existing scores, delete, insert with scores restored
+    existing_scores: dict[str, tuple[int | None, str | None]] = {}
+    try:
+        score_rows = conn.execute(
+            f"SELECT market_id, attractiveness_score, attractiveness_reason "
+            f"FROM markets WHERE market_id IN ({placeholders})",
+            market_ids,
+        ).fetchall()
+        existing_scores = {r[0]: (r[1], r[2]) for r in score_rows}
+    except Exception:
+        pass
+
     conn.execute(f"DELETE FROM markets WHERE market_id IN ({placeholders})", market_ids)
     conn.executemany(
         """INSERT INTO markets
            (market_id, question, slug, category, end_date,
-            volume_usd, liquidity_usd, active, last_synced)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-        rows,
+            volume_usd, liquidity_usd, active, resolved, last_price,
+            last_synced, attractiveness_score, attractiveness_reason)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        [
+            (*r, existing_scores.get(r[0], (None, None))[0],
+                 existing_scores.get(r[0], (None, None))[1])
+            for r in rows
+        ],
     )
     logger.info("Markets upserted", count=len(rows))
     return len(rows)
@@ -133,11 +209,7 @@ async def fetch_market_by_id(
     *,
     base_url: str | None = None,
 ) -> dict[str, Any] | None:
-    """Fetch a single market by condition_id from the REST API.
-
-    Returns the raw market dict, or ``None`` if the market is not found or
-    the request fails.
-    """
+    """Fetch a single market by condition_id from the REST API."""
     url = base_url or settings.polymarket_rest_url
     async with httpx.AsyncClient(verify=False, timeout=15) as client:
         try:
@@ -145,7 +217,8 @@ async def fetch_market_by_id(
             if resp.status_code == 404:
                 return None
             resp.raise_for_status()
-            return resp.json()
+            data: dict[str, Any] = resp.json()
+            return data
         except Exception as exc:
             logger.warning(
                 "Failed to fetch market by id",
@@ -156,12 +229,63 @@ async def fetch_market_by_id(
 
 
 async def sync_markets(conn: Any, *, base_url: str | None = None) -> int:
-    """Full sync: fetch from API → upsert into DuckDB.
+    """Full sync: fetch all markets from API → upsert into DuckDB.
 
     Returns the number of markets upserted.
     """
     markets = await fetch_all_markets(base_url=base_url)
     return upsert_markets(conn, markets)
+
+
+def get_priority_market_ids(
+    conn: Any,
+    *,
+    limit: int | None = None,
+    min_liquidity: float | None = None,
+    min_score: int | None = None,
+) -> list[str]:
+    """Return top-N market condition_ids ranked by insider-trading priority.
+
+    Priority = (attractiveness/100) × time_weight × uncertainty × liquidity_scaling
+
+    Markets without an attractiveness score are excluded.  If fewer than
+    ``limit`` scored markets qualify, fills remaining slots from the
+    top-liquidity unscored markets so the hot tier is never empty.
+
+    Args:
+        conn: DuckDB connection.
+        limit: Max markets to return (defaults to settings.hot_market_count).
+        min_liquidity: Minimum liquidity_usd (defaults to settings.hot_market_min_liquidity).
+        min_score: Minimum attractiveness_score (defaults to settings.hot_market_min_score).
+
+    Returns:
+        List of condition_ids in priority order.
+    """
+    n = limit or settings.hot_market_count
+    liq = min_liquidity if min_liquidity is not None else settings.hot_market_min_liquidity
+    score_thresh = min_score if min_score is not None else settings.hot_market_min_score
+
+    rows = conn.execute(_PRIORITY_SQL, [liq, score_thresh, n]).fetchall()
+    result = [r[0] for r in rows]
+
+    # Fill with liquidity-sorted unscored markets if hot tier is thin
+    if len(result) < n:
+        needed = n - len(result)
+        existing = set(result)
+        fallback_rows = conn.execute(_FALLBACK_SQL, [liq, n * 2]).fetchall()
+        for r in fallback_rows:
+            if r[0] not in existing:
+                result.append(r[0])
+                if len(result) >= n:
+                    break
+        if len(result) > len(rows):
+            logger.info(
+                "Hot tier padded with unscored markets",
+                scored=len(rows),
+                padded=len(result) - len(rows),
+            )
+
+    return result
 
 
 async def fetch_active_asset_ids(
@@ -171,15 +295,8 @@ async def fetch_active_asset_ids(
 ) -> list[str]:
     """Fetch token IDs for the most actively-traded markets.
 
-    Uses the ``/sampling-markets`` endpoint which returns the top markets
-    by recent activity.  Extracts both YES and NO token IDs from each market.
-
-    Args:
-        base_url: Override for the REST URL.
-        limit: Max number of markets to pull (each yields 2 token IDs).
-
-    Returns:
-        A flat list of asset_id strings (token IDs).
+    Uses the ``/sampling-markets`` endpoint.  Extracts both YES and NO
+    token IDs from each market.
     """
     active = await fetch_active_markets(base_url=base_url, limit=limit)
     asset_ids: list[str] = []
@@ -195,15 +312,8 @@ async def fetch_active_markets(
 ) -> list[tuple[str, list[str]]]:
     """Fetch actively-traded markets with their condition_ids and token IDs.
 
-    Uses the ``/sampling-markets`` endpoint which returns the top markets
-    by recent activity.
-
-    Args:
-        base_url: Override for the REST URL.
-        limit: Max number of markets to pull.
-
-    Returns:
-        A list of ``(condition_id, [asset_id, ...])`` tuples.
+    Uses the ``/sampling-markets`` endpoint for WS subscription bootstrap only.
+    Hot-tier polling now uses ``get_priority_market_ids()`` instead.
     """
     url = base_url or settings.polymarket_rest_url
     result: list[tuple[str, list[str]]] = []
@@ -213,7 +323,6 @@ async def fetch_active_markets(
         resp.raise_for_status()
         body = resp.json()
 
-    # Handle both response formats: array or {data: [...]}
     if isinstance(body, list):
         markets = body
     elif isinstance(body, dict):
@@ -235,12 +344,11 @@ async def fetch_active_markets(
                 token_ids.append(tid)
         if token_ids:
             result.append((condition_id, token_ids))
-        # Enforce client-side limit (API may ignore the query param)
         if len(result) >= limit:
             break
 
     logger.info(
-        "Fetched active markets",
+        "Fetched active markets for WS bootstrap",
         markets=len(result),
         assets=sum(len(aids) for _, aids in result),
     )
@@ -253,4 +361,3 @@ def get_all_condition_ids(conn: Any) -> list[str]:
         "SELECT market_id FROM markets WHERE active = true ORDER BY market_id"
     ).fetchall()
     return [r[0] for r in rows]
-    return result

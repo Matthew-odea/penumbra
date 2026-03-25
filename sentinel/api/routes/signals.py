@@ -75,7 +75,9 @@ async def list_signals(
             -- market
             m.question AS market_question,
             m.category,
-            m.liquidity_usd AS market_liquidity
+            m.liquidity_usd AS market_liquidity,
+            m.attractiveness_score,
+            m.attractiveness_reason
         FROM signals s
         LEFT JOIN signal_reasoning sr ON s.signal_id = sr.signal_id
         LEFT JOIN markets m ON s.market_id = m.market_id
@@ -97,6 +99,7 @@ async def list_signals(
         "classification", "tier1_confidence", "suspicion_score",
         "reasoning", "key_evidence", "news_headlines", "tier1_model", "tier2_model",
         "market_question", "category", "market_liquidity",
+        "attractiveness_score", "attractiveness_reason",
     ]
 
     result = []

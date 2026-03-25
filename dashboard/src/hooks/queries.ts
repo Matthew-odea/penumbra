@@ -4,10 +4,12 @@ import { useQuery } from '@tanstack/react-query'
 import {
   fetchSignals,
   fetchSignalStats,
+  fetchMarkets,
   fetchMarketDetail,
   fetchMarketVolume,
   fetchMarketSignals,
   fetchMarketAnomalies,
+  fetchWatchlist,
   fetchWallets,
   fetchWalletProfile,
   fetchWalletTrades,
@@ -36,6 +38,26 @@ export function useSignalStats() {
     queryKey: ['signal-stats'],
     queryFn: fetchSignalStats,
     refetchInterval: POLL,
+  })
+}
+
+export function useWatchlist() {
+  return useQuery({
+    queryKey: ['watchlist'],
+    queryFn: fetchWatchlist,
+    refetchInterval: 30_000, // 30s — hot tier refreshes every 30 min
+  })
+}
+
+export function useAllMarkets(opts?: {
+  tier?: 'hot' | 'scored' | 'unscored'
+  min_score?: number
+  sort?: 'signals' | 'priority' | 'liquidity' | 'resolution'
+}) {
+  return useQuery({
+    queryKey: ['all-markets', opts],
+    queryFn: () => fetchMarkets({ limit: 2000, active_only: false, ...opts }),
+    refetchInterval: 60_000,
   })
 }
 

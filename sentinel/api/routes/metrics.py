@@ -5,6 +5,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Query
 
 from sentinel.api.deps import get_db
+from sentinel.config import settings
 
 router = APIRouter(tags=["metrics"])
 
@@ -240,6 +241,33 @@ async def overview() -> dict:
         "total": t2_row[2] if t2_row else 0,
     }
 
+    # ── Market coverage (attractiveness scoring progress) ────────────
+    coverage_row = db.execute("""
+        SELECT
+            COUNT(*) FILTER (WHERE active = true AND resolved = false)         AS total,
+            COUNT(*) FILTER (WHERE active = true AND resolved = false
+                               AND attractiveness_score IS NOT NULL
+                               AND attractiveness_score >= ?)                  AS hot_eligible,
+            COUNT(*) FILTER (WHERE attractiveness_score IS NOT NULL)           AS scored,
+            COUNT(*) FILTER (WHERE attractiveness_score IS NULL
+                               AND active = true AND resolved = false)         AS unscored,
+            ROUND(AVG(attractiveness_score) FILTER (
+                WHERE attractiveness_score IS NOT NULL
+                  AND active = true AND resolved = false
+                  AND attractiveness_score >= ?
+            ), 1)                                                               AS avg_hot_score
+        FROM markets
+    """, [settings.hot_market_min_score, settings.hot_market_min_score]).fetchone()
+
+    market_coverage = {
+        "total": coverage_row[0] if coverage_row else 0,
+        "hot_eligible": coverage_row[1] if coverage_row else 0,
+        "scored": coverage_row[2] if coverage_row else 0,
+        "unscored": coverage_row[3] if coverage_row else 0,
+        "avg_hot_score": float(coverage_row[4]) if coverage_row and coverage_row[4] else None,
+        "hot_capacity": settings.hot_market_count,
+    }
+
     return {
         "funnel": funnel,
         "classification": classification,
@@ -247,6 +275,7 @@ async def overview() -> dict:
         "top_markets": top_markets,
         "top_traded_markets": top_traded_markets,
         "tier2_coverage": tier2_coverage,
+        "market_coverage": market_coverage,
     }
 
 

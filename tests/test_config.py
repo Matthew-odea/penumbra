@@ -20,7 +20,8 @@ class TestSettings:
         assert s.alert_min_score == 80
         assert s.news_cache_ttl_hours == 12  # Extended cache
         assert s.news_min_score == 70  # Only fetch for high-scoring signals
-        assert "Biotech" in s.polymarket_categories
+        assert s.hot_market_count == 50
+        assert s.hot_market_min_score == 60
 
     def test_alchemy_url_resolution(self) -> None:
         """Alchemy URL is correctly constructed from API key."""

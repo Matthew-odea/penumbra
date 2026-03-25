@@ -22,17 +22,20 @@ SCHEMA_SQL = """
 -- ─── Core Tables ─────────────────────────────────────────────────────────────
 
 CREATE TABLE IF NOT EXISTS markets (
-    market_id       VARCHAR PRIMARY KEY,   -- Polymarket condition_id
-    question        VARCHAR,
-    slug            VARCHAR,
-    category        VARCHAR,               -- Biotech, Politics, Crypto, Science
-    end_date        TIMESTAMP,
-    volume_usd      DECIMAL(18, 6),
-    liquidity_usd   DECIMAL(18, 6),
-    active          BOOLEAN DEFAULT TRUE,
-    resolved        BOOLEAN DEFAULT FALSE,
-    resolved_price  DECIMAL(10, 6),        -- 1.0 if YES, 0.0 if NO, NULL if unresolved
-    last_synced     TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    market_id            VARCHAR PRIMARY KEY,   -- Polymarket condition_id
+    question             VARCHAR,
+    slug                 VARCHAR,
+    category             VARCHAR,               -- Raw tags joined with commas
+    end_date             TIMESTAMP,
+    volume_usd           DECIMAL(18, 6),
+    liquidity_usd        DECIMAL(18, 6),
+    active               BOOLEAN DEFAULT TRUE,
+    resolved             BOOLEAN DEFAULT FALSE,
+    resolved_price       DECIMAL(10, 6),        -- 1.0 if YES, 0.0 if NO, NULL if unresolved
+    last_synced          TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    last_price           DECIMAL(10, 6),        -- YES token current price (0-1 probability)
+    attractiveness_score INTEGER,               -- LLM score 0-100, NULL until scored
+    attractiveness_reason VARCHAR               -- One-sentence explanation from LLM
 );
 
 CREATE TABLE IF NOT EXISTS trades (
@@ -364,6 +367,23 @@ def init_schema(db_path: Path | None = None) -> duckdb.DuckDBPyConnection:
         conn.execute("ALTER TABLE signals ADD COLUMN liquidity_cliff BOOLEAN")
         conn.execute("UPDATE signals SET liquidity_cliff = FALSE WHERE liquidity_cliff IS NULL")
         logger.info("Migration: added 'liquidity_cliff' column to signals table")
+
+    # v007-v009: market intelligence columns
+    mkt_cols = {
+        r[0]
+        for r in conn.execute(
+            "SELECT column_name FROM information_schema.columns WHERE table_name='markets'"
+        ).fetchall()
+    }
+    if "last_price" not in mkt_cols:
+        conn.execute("ALTER TABLE markets ADD COLUMN last_price DECIMAL(10, 6)")
+        logger.info("Migration: added 'last_price' column to markets table")
+    if "attractiveness_score" not in mkt_cols:
+        conn.execute("ALTER TABLE markets ADD COLUMN attractiveness_score INTEGER")
+        logger.info("Migration: added 'attractiveness_score' column to markets table")
+    if "attractiveness_reason" not in mkt_cols:
+        conn.execute("ALTER TABLE markets ADD COLUMN attractiveness_reason VARCHAR")
+        logger.info("Migration: added 'attractiveness_reason' column to markets table")
 
     # Force WAL checkpoint so all schema changes are flushed to the .duckdb
     # file before this function returns.  Without this, if the process is

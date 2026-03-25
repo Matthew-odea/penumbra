@@ -5,6 +5,7 @@ import type {
   SignalStats,
   Market,
   MarketDetail,
+  WatchlistMarket,
   VolumePoint,
   AnomalyPoint,
   WalletProfile,
@@ -57,8 +58,15 @@ export function fetchSignalStats(): Promise<SignalStats> {
 export function fetchMarkets(opts?: {
   limit?: number
   active_only?: boolean
+  tier?: 'hot' | 'scored' | 'unscored'
+  min_score?: number
+  sort?: 'signals' | 'priority' | 'liquidity' | 'resolution'
 }): Promise<Market[]> {
   return get<Market[]>(`${BASE}/markets`, opts)
+}
+
+export function fetchWatchlist(): Promise<WatchlistMarket[]> {
+  return get<WatchlistMarket[]>(`${BASE}/watchlist`)
 }
 
 export function fetchMarketDetail(marketId: string): Promise<MarketDetail> {
