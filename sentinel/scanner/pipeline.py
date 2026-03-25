@@ -28,7 +28,12 @@ from sentinel.ingester.models import BookEvent, IngesterEvent, Trade
 from sentinel.scanner.funding import check_funding_anomaly
 from sentinel.scanner.price_impact import compute_impact_score, get_price_impact
 from sentinel.scanner.scorer import Signal, build_signal, write_signal
-from sentinel.scanner.volume import get_zscore_for_market
+from sentinel.scanner.volume import (
+    get_zscore_for_market,
+    get_ofi_for_market,
+    get_market_concentration,
+    get_hours_to_resolution,
+)
 from sentinel.scanner.wallet_profiler import get_wallet_profile
 
 logger = structlog.get_logger()
@@ -78,14 +83,17 @@ class Scanner:
             except asyncio.CancelledError:
                 break
 
-            for event in batch:
-                if isinstance(event, Trade):
-                    await self._process_trade(event)
-                elif isinstance(event, BookEvent):
-                    self._book_events_scanned += 1
-                    # BookEvents feed into volume stats via DuckDB but
-                    # don't generate signals directly — they're order book
-                    # changes, not trade executions.
+            try:
+                for event in batch:
+                    if isinstance(event, Trade):
+                        await self._process_trade(event)
+                    elif isinstance(event, BookEvent):
+                        self._book_events_scanned += 1
+                        # BookEvents feed into volume stats via DuckDB but
+                        # don't generate signals directly — they're order book
+                        # changes, not trade executions.
+            finally:
+                self._scanner_queue.task_done()
 
     def stop(self) -> None:
         self._running = False
@@ -112,12 +120,17 @@ class Scanner:
         if float(trade.size_usd) < settings.min_trade_size_usd:
             return
 
-        # 1. Volume Z-score for this trade's market
+        # 1. Volume Z-score + OFI for this trade's market
         z_score = 0.0
+        ofi_score = 0.0
         try:
             z_score = get_zscore_for_market(self._conn, trade.market_id)
         except Exception as exc:
             logger.debug("Z-score lookup failed", market=trade.market_id, error=str(exc))
+        try:
+            ofi_score = get_ofi_for_market(self._conn, trade.market_id)
+        except Exception as exc:
+            logger.debug("OFI lookup failed", market=trade.market_id, error=str(exc))
 
         # 2. Price impact
         price_impact_score = 0.0
@@ -159,6 +172,20 @@ class Scanner:
         except Exception as exc:
             logger.debug("Funding check failed", wallet=trade.wallet[:10], error=str(exc))
 
+        # 5. Market concentration (wallet focus on this market)
+        market_concentration = 0.0
+        try:
+            market_concentration = get_market_concentration(self._conn, trade.wallet, trade.market_id)
+        except Exception as exc:
+            logger.debug("Concentration lookup failed", wallet=trade.wallet[:10], error=str(exc))
+
+        # 6. Time to resolution
+        hours_to_resolution: int | None = None
+        try:
+            hours_to_resolution = get_hours_to_resolution(self._conn, trade.market_id, trade.timestamp)
+        except Exception as exc:
+            logger.debug("Hours-to-resolution lookup failed", market=trade.market_id, error=str(exc))
+
         # Build and score the signal
         signal = build_signal(
             trade_id=trade.trade_id,
@@ -176,6 +203,9 @@ class Scanner:
             is_whitelisted=is_whitelisted,
             funding_anomaly=funding_anomaly,
             funding_age_minutes=funding_age_minutes,
+            ofi_score=ofi_score,
+            hours_to_resolution=hours_to_resolution,
+            market_concentration=market_concentration,
         )
 
         if signal.statistical_score < settings.signal_min_score:
@@ -190,8 +220,11 @@ class Scanner:
             market=trade.market_id[:12],
             wallet=trade.wallet[:10],
             z_score=round(z_score, 2),
+            ofi=round(ofi_score, 2),
             impact=round(price_impact_score, 4),
             win_rate=round(wallet_win_rate, 3) if wallet_win_rate else None,
+            concentration=round(market_concentration, 2),
+            hours_to_res=hours_to_resolution,
             funding_anomaly=funding_anomaly,
         )
 

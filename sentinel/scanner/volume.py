@@ -122,3 +122,83 @@ def get_anomaly_for_market(conn: Any, market_id: str) -> VolumeAnomaly | None:
     """Return the latest volume stats for a single market (regardless of threshold)."""
     row = conn.execute(_ANOMALY_FOR_MARKET_SQL, [market_id]).fetchone()
     return _row_to_anomaly(row) if row else None
+
+
+# ── Order Flow Imbalance ────────────────────────────────────────────────────
+
+_OFI_SQL = """
+SELECT
+    SUM(CASE WHEN side = 'BUY'  THEN size_usd ELSE 0 END) AS buy_vol,
+    SUM(CASE WHEN side = 'SELL' THEN size_usd ELSE 0 END) AS sell_vol,
+    SUM(size_usd) AS total_vol
+FROM trades
+WHERE market_id = ?
+  AND timestamp >= CURRENT_TIMESTAMP - INTERVAL '1 hour'
+"""
+
+_CONCENTRATION_SQL = """
+SELECT
+    COUNT(*) FILTER (WHERE market_id = ?) * 1.0 / COUNT(*) AS concentration
+FROM (
+    SELECT market_id
+    FROM trades
+    WHERE wallet = ?
+    ORDER BY timestamp DESC
+    LIMIT 50
+) recent
+"""
+
+_HOURS_TO_RESOLUTION_SQL = """
+SELECT end_date
+FROM markets
+WHERE market_id = ?
+"""
+
+
+def get_ofi_for_market(conn: Any, market_id: str) -> float:
+    """Return order flow imbalance ∈ [-1, 1] for the last hour.
+
+    Positive = net buying pressure; negative = net selling.
+    Returns 0.0 if no trades in the last hour.
+    """
+    row = conn.execute(_OFI_SQL, [market_id]).fetchone()
+    if not row or not row[2] or float(row[2]) == 0:
+        return 0.0
+    buy_vol = float(row[0] or 0)
+    sell_vol = float(row[1] or 0)
+    total_vol = float(row[2])
+    return (buy_vol - sell_vol) / total_vol
+
+
+def get_market_concentration(conn: Any, wallet: str, market_id: str) -> float:
+    """Return fraction of wallet's last 50 trades that are on this market.
+
+    High concentration (≥ 0.5) suggests domain-specific informed trading.
+    Returns 0.0 if no trade history.
+    """
+    row = conn.execute(_CONCENTRATION_SQL, [market_id, wallet]).fetchone()
+    if not row or row[0] is None:
+        return 0.0
+    return float(row[0])
+
+
+def get_hours_to_resolution(conn: Any, market_id: str, trade_timestamp: Any) -> int | None:
+    """Return hours between trade_timestamp and market end_date.
+
+    Returns None if end_date is unknown or already passed.
+    """
+    from datetime import UTC, datetime
+
+    row = conn.execute(_HOURS_TO_RESOLUTION_SQL, [market_id]).fetchone()
+    if not row or row[0] is None:
+        return None
+    end_date = row[0]
+    # Ensure both are timezone-aware
+    if hasattr(end_date, "tzinfo") and end_date.tzinfo is None:
+        end_date = end_date.replace(tzinfo=UTC)
+    if hasattr(trade_timestamp, "tzinfo") and trade_timestamp.tzinfo is None:
+        trade_timestamp = trade_timestamp.replace(tzinfo=UTC)
+    delta_seconds = (end_date - trade_timestamp).total_seconds()
+    if delta_seconds <= 0:
+        return None  # Market already resolved
+    return int(delta_seconds / 3600)

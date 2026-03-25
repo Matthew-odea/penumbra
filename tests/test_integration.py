@@ -88,10 +88,10 @@ def _full_db() -> duckdb.DuckDBPyConnection:
         score = 30 + i * 10
         conn.execute(
             "INSERT INTO signals VALUES "
-            "(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             [sid, f"trade-{i:03d}", mid, wallet, "BUY", 0.65, 5000.0,
              base + timedelta(minutes=i * 15),
-             3.5, 2.1, 0.03, 0.72, 15, False, False, None, score, now],
+             3.5, 2.1, 0.03, 0.72, 15, False, False, None, score, 0.0, None, 0.0, now],
         )
 
     # Reasoning for first 6 signals
@@ -101,11 +101,11 @@ def _full_db() -> duckdb.DuckDBPyConnection:
         suspicion = min(30 + i * 15, 100)
         conn.execute(
             "INSERT INTO signal_reasoning VALUES "
-            "(?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             [sid, f"trade-{i:03d}", classification, 60 + i * 5,
              suspicion, "Test reasoning text", "Evidence item",
              '["headline 1"]', "nova-lite", "nova-pro" if i >= 3 else None,
-             150, 300 if i >= 3 else None, now],
+             150, 300 if i >= 3 else None, i >= 3, now],
         )
 
     # Budget

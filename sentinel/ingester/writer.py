@@ -123,12 +123,18 @@ class BatchWriter:
     def _write_batch(self, batch: list[Trade]) -> None:
         t0 = time.perf_counter()
         rows = [t.as_db_tuple() for t in batch]
+        before = self._conn.execute("SELECT COUNT(*) FROM trades").fetchone()[0]
         self._conn.executemany(_INSERT_SQL, rows)
+        after = self._conn.execute("SELECT COUNT(*) FROM trades").fetchone()[0]
         elapsed_ms = (time.perf_counter() - t0) * 1000
-        self._total_written += len(batch)
+        inserted = after - before
+        duplicates = len(batch) - inserted
+        self._total_written += inserted
+        if duplicates > 0:
+            logger.debug("Duplicate trades skipped", count=duplicates, batch_size=len(batch))
         logger.debug(
             "Batch written",
-            size=len(batch),
+            size=inserted,
             total=self._total_written,
             latency_ms=round(elapsed_ms, 1),
         )

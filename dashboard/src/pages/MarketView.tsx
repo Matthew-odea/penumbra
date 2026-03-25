@@ -1,5 +1,5 @@
 import { useParams, Link } from 'react-router-dom'
-import { useMarketDetail, useMarketVolume, useMarketSignals } from '../hooks/queries'
+import { useMarketDetail, useMarketVolume, useMarketSignals, useMarketAnomalies } from '../hooks/queries'
 import { fmtUsd } from '../lib/format'
 import VolumeChart from '../components/VolumeChart'
 import SignalTable from '../components/SignalTable'
@@ -8,6 +8,7 @@ export default function MarketView() {
   const { marketId } = useParams<{ marketId: string }>()
   const { data: market, isLoading: loadingMarket } = useMarketDetail(marketId!)
   const { data: volume = [] } = useMarketVolume(marketId!)
+  const { data: anomalies = [] } = useMarketAnomalies(marketId!)
   const { data: signals = [] } = useMarketSignals(marketId!)
 
   if (loadingMarket) {
@@ -64,7 +65,13 @@ export default function MarketView() {
         <div className="text-[11px] uppercase tracking-wider text-neutral-500 mb-3">
           Hourly Volume (24h)
         </div>
-        <VolumeChart data={volume} />
+        <VolumeChart data={volume} anomalies={anomalies} />
+        {anomalies.length > 0 && (
+          <div className="text-[10px] text-neutral-600 mt-1 flex items-center gap-1">
+            <span className="inline-block w-3 h-px bg-red-500" />
+            Red line = volume anomaly Z-score (right axis). Spikes indicate statistically unusual activity.
+          </div>
+        )}
       </div>
 
       {/* Market Signals */}

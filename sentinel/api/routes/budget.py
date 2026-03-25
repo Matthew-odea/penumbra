@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import UTC, datetime
 
 from fastapi import APIRouter
 
@@ -15,7 +15,7 @@ router = APIRouter(tags=["budget"])
 async def get_budget() -> dict:
     """Current day's Bedrock budget usage for both tiers."""
     db = get_db()
-    today = date.today().isoformat()
+    today = datetime.now(tz=UTC).date().isoformat()
 
     rows = db.execute(
         "SELECT tier, calls_used, calls_limit FROM llm_budget WHERE date = ?",

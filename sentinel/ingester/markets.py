@@ -128,6 +128,33 @@ def upsert_markets(conn: Any, markets: list[dict[str, Any]]) -> int:
     return len(rows)
 
 
+async def fetch_market_by_id(
+    condition_id: str,
+    *,
+    base_url: str | None = None,
+) -> dict[str, Any] | None:
+    """Fetch a single market by condition_id from the REST API.
+
+    Returns the raw market dict, or ``None`` if the market is not found or
+    the request fails.
+    """
+    url = base_url or settings.polymarket_rest_url
+    async with httpx.AsyncClient(verify=False, timeout=15) as client:
+        try:
+            resp = await client.get(f"{url}/markets/{condition_id}")
+            if resp.status_code == 404:
+                return None
+            resp.raise_for_status()
+            return resp.json()
+        except Exception as exc:
+            logger.warning(
+                "Failed to fetch market by id",
+                condition_id=condition_id,
+                error=str(exc),
+            )
+            return None
+
+
 async def sync_markets(conn: Any, *, base_url: str | None = None) -> int:
     """Full sync: fetch from API → upsert into DuckDB.
 

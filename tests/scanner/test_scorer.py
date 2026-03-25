@@ -270,4 +270,4 @@ class TestBuildSignal:
             trade_timestamp=now,
         )
         t = signal.as_db_tuple()
-        assert len(t) == 18  # 18 columns in signals table
+        assert len(t) == 21  # 21 columns in signals table

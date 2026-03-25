@@ -73,6 +73,7 @@ def db():
             tier2_model     VARCHAR,
             tier1_tokens    INTEGER,
             tier2_tokens    INTEGER,
+            tier2_used      BOOLEAN DEFAULT FALSE,
             created_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     """)

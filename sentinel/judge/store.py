@@ -32,6 +32,7 @@ class Alert:
     reasoning: str
     key_evidence: str = ""
     classification: str = "INFORMED"
+    tier2_fallback: bool = False
 
 
 # ── DuckDB persistence ─────────────────────────────────────────────────────
@@ -40,8 +41,8 @@ _INSERT_REASONING_SQL = """
 INSERT OR REPLACE INTO signal_reasoning (
     signal_id, trade_id, classification, tier1_confidence,
     suspicion_score, reasoning, key_evidence, news_headlines,
-    tier1_model, tier2_model, tier1_tokens, tier2_tokens, created_at
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+    tier1_model, tier2_model, tier1_tokens, tier2_tokens, tier2_used, created_at
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
 """
 
 
@@ -51,29 +52,39 @@ def store_reasoning(
     t1_result: ClassificationResult,
     t2_result: ReasoningResult | None,
     headlines: list[str],
+    *,
+    tier2_fallback: bool = False,
 ) -> None:
     """Persist a judge result to the ``signal_reasoning`` table."""
     final_score = t2_result.suspicion_score if t2_result else t1_result.confidence
     reasoning = t2_result.reasoning if t2_result else t1_result.one_liner
     key_evidence = t2_result.key_evidence if t2_result else ""
+    tier2_used = t2_result is not None and not tier2_fallback
 
-    db.execute(
-        _INSERT_REASONING_SQL,
-        [
-            signal.signal_id,
-            signal.trade_id,
-            t1_result.classification,
-            t1_result.confidence,
-            final_score,
-            reasoning,
-            key_evidence,
-            json.dumps(headlines),
-            t1_result.model,
-            t2_result.model if t2_result else None,
-            t1_result.input_tokens + t1_result.output_tokens,
-            (t2_result.input_tokens + t2_result.output_tokens) if t2_result else None,
-        ],
-    )
+    db.begin()
+    try:
+        db.execute(
+            _INSERT_REASONING_SQL,
+            [
+                signal.signal_id,
+                signal.trade_id,
+                t1_result.classification,
+                t1_result.confidence,
+                final_score,
+                reasoning,
+                key_evidence,
+                json.dumps(headlines),
+                t1_result.model,
+                t2_result.model if t2_result else None,
+                t1_result.input_tokens + t1_result.output_tokens,
+                (t2_result.input_tokens + t2_result.output_tokens) if t2_result else None,
+                tier2_used,
+            ],
+        )
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
     logger.info(
         "Reasoning stored",
         signal_id=signal.signal_id,
@@ -86,6 +97,8 @@ def build_alert(
     signal: Signal,
     t1_result: ClassificationResult,
     t2_result: ReasoningResult | None,
+    *,
+    tier2_fallback: bool = False,
 ) -> Alert | None:
     """Create an ``Alert`` if the final score meets the threshold."""
     final_score = t2_result.suspicion_score if t2_result else t1_result.confidence
@@ -101,4 +114,5 @@ def build_alert(
         reasoning=reasoning,
         key_evidence=key_evidence,
         classification=t1_result.classification,
+        tier2_fallback=tier2_fallback,
     )

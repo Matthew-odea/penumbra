@@ -80,6 +80,10 @@ CREATE TABLE IF NOT EXISTS signals (
     funding_age_minutes INTEGER,
     -- Composite score (pre-Judge)
     statistical_score   INTEGER,
+    -- Enriched signals (sprint 4)
+    ofi_score           DECIMAL(8, 4),   -- Order flow imbalance [-1, 1]
+    hours_to_resolution INTEGER,         -- Hours from trade to market end_date
+    market_concentration DECIMAL(5, 4),  -- Fraction of wallet's recent 50 trades on this market
     created_at          TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -96,6 +100,7 @@ CREATE TABLE IF NOT EXISTS signal_reasoning (
     tier2_model         VARCHAR,
     tier1_tokens        INTEGER,
     tier2_tokens        INTEGER,
+    tier2_used          BOOLEAN DEFAULT FALSE,
     created_at          TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -163,6 +168,28 @@ FROM hourly h
 JOIN market_stats ms ON h.market_id = ms.market_id
 JOIN market_mad mm ON h.market_id = mm.market_id;
 
+-- Order flow imbalance per market-hour (last 24h)
+-- OFI = (buy_vol - sell_vol) / total_vol  ∈ [-1, 1]
+-- Strongly positive = net buying; negative = net selling
+CREATE OR REPLACE VIEW v_order_flow_imbalance AS
+SELECT
+    market_id,
+    date_trunc('hour', timestamp) AS hour_bucket,
+    SUM(CASE WHEN side = 'BUY'  THEN size_usd ELSE 0 END) AS buy_volume,
+    SUM(CASE WHEN side = 'SELL' THEN size_usd ELSE 0 END) AS sell_volume,
+    SUM(size_usd) AS total_volume,
+    CASE
+        WHEN SUM(size_usd) > 0
+        THEN (
+            SUM(CASE WHEN side = 'BUY'  THEN size_usd ELSE 0 END) -
+            SUM(CASE WHEN side = 'SELL' THEN size_usd ELSE 0 END)
+        ) / SUM(size_usd)
+        ELSE 0
+    END AS ofi
+FROM trades
+WHERE timestamp >= CURRENT_TIMESTAMP - INTERVAL '24 hours'
+GROUP BY 1, 2;
+
 -- Wallet performance on resolved markets
 CREATE OR REPLACE VIEW v_wallet_performance AS
 SELECT
@@ -217,6 +244,34 @@ def init_schema(db_path: Path | None = None) -> duckdb.DuckDBPyConnection:
     if "source" not in cols:
         conn.execute("ALTER TABLE trades ADD COLUMN source VARCHAR DEFAULT 'ws'")
         logger.info("Migration: added 'source' column to trades table")
+
+    # v003: add tier2_used column to signal_reasoning
+    sr_cols = {
+        r[0]
+        for r in conn.execute(
+            "SELECT column_name FROM information_schema.columns WHERE table_name='signal_reasoning'"
+        ).fetchall()
+    }
+    if "tier2_used" not in sr_cols:
+        conn.execute("ALTER TABLE signal_reasoning ADD COLUMN tier2_used BOOLEAN DEFAULT FALSE")
+        logger.info("Migration: added 'tier2_used' column to signal_reasoning table")
+
+    # v004: enriched signal columns (OFI, time-to-resolution, concentration)
+    sig_cols = {
+        r[0]
+        for r in conn.execute(
+            "SELECT column_name FROM information_schema.columns WHERE table_name='signals'"
+        ).fetchall()
+    }
+    if "ofi_score" not in sig_cols:
+        conn.execute("ALTER TABLE signals ADD COLUMN ofi_score DECIMAL(8, 4)")
+        logger.info("Migration: added 'ofi_score' column to signals table")
+    if "hours_to_resolution" not in sig_cols:
+        conn.execute("ALTER TABLE signals ADD COLUMN hours_to_resolution INTEGER")
+        logger.info("Migration: added 'hours_to_resolution' column to signals table")
+    if "market_concentration" not in sig_cols:
+        conn.execute("ALTER TABLE signals ADD COLUMN market_concentration DECIMAL(5, 4)")
+        logger.info("Migration: added 'market_concentration' column to signals table")
 
     logger.info("Schema initialized successfully")
 

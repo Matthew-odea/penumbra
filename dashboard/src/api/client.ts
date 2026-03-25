@@ -6,12 +6,16 @@ import type {
   Market,
   MarketDetail,
   VolumePoint,
+  AnomalyPoint,
   WalletProfile,
   WalletTrade,
+  WalletLeader,
   Budget,
   HealthStatus,
   TimeseriesPoint,
   MetricsOverview,
+  MarketAccuracy,
+  HourPattern,
   IngestionMetrics,
 } from './types'
 
@@ -75,7 +79,15 @@ export function fetchMarketSignals(
   return get<Signal[]>(`${BASE}/markets/${marketId}/signals`, { limit })
 }
 
+export function fetchMarketAnomalies(marketId: string): Promise<AnomalyPoint[]> {
+  return get<AnomalyPoint[]>(`${BASE}/markets/${marketId}/anomalies`)
+}
+
 /* ── Wallets ─────────────────────────────────────────────────────────── */
+
+export function fetchWallets(limit = 50): Promise<WalletLeader[]> {
+  return get<WalletLeader[]>(`${BASE}/wallets`, { limit })
+}
 
 export function fetchWalletProfile(address: string): Promise<WalletProfile> {
   return get<WalletProfile>(`${BASE}/wallets/${address}`)
@@ -118,6 +130,14 @@ export function fetchTimeseries(
 
 export function fetchMetricsOverview(): Promise<MetricsOverview> {
   return get<MetricsOverview>(`${BASE}/metrics/overview`)
+}
+
+export function fetchMetricsAccuracy(): Promise<MarketAccuracy[]> {
+  return get<MarketAccuracy[]>(`${BASE}/metrics/accuracy`)
+}
+
+export function fetchMetricsPatterns(): Promise<HourPattern[]> {
+  return get<HourPattern[]>(`${BASE}/metrics/patterns`)
 }
 
 export function fetchIngestion(): Promise<IngestionMetrics> {

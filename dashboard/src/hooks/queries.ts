@@ -7,6 +7,8 @@ import {
   fetchMarketDetail,
   fetchMarketVolume,
   fetchMarketSignals,
+  fetchMarketAnomalies,
+  fetchWallets,
   fetchWalletProfile,
   fetchWalletTrades,
   fetchWalletSignals,
@@ -14,6 +16,8 @@ import {
   fetchHealth,
   fetchTimeseries,
   fetchMetricsOverview,
+  fetchMetricsAccuracy,
+  fetchMetricsPatterns,
   fetchIngestion,
 } from '../api/client'
 
@@ -58,6 +62,23 @@ export function useMarketSignals(marketId: string) {
     queryFn: () => fetchMarketSignals(marketId),
     enabled: !!marketId,
     refetchInterval: POLL,
+  })
+}
+
+export function useMarketAnomalies(marketId: string) {
+  return useQuery({
+    queryKey: ['market-anomalies', marketId],
+    queryFn: () => fetchMarketAnomalies(marketId),
+    enabled: !!marketId,
+    refetchInterval: POLL,
+  })
+}
+
+export function useWallets(limit = 50) {
+  return useQuery({
+    queryKey: ['wallets', limit],
+    queryFn: () => fetchWallets(limit),
+    refetchInterval: 60_000, // 1 min — leaderboard changes slowly
   })
 }
 
@@ -115,6 +136,22 @@ export function useMetricsOverview() {
     queryKey: ['metrics-overview'],
     queryFn: fetchMetricsOverview,
     refetchInterval: POLL,
+  })
+}
+
+export function useMetricsAccuracy() {
+  return useQuery({
+    queryKey: ['metrics-accuracy'],
+    queryFn: fetchMetricsAccuracy,
+    refetchInterval: 60_000,
+  })
+}
+
+export function useMetricsPatterns() {
+  return useQuery({
+    queryKey: ['metrics-patterns'],
+    queryFn: fetchMetricsPatterns,
+    refetchInterval: 60_000,
   })
 }
 

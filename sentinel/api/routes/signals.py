@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+
 from fastapi import APIRouter, Query
 
 from sentinel.api.deps import get_db
@@ -12,6 +14,7 @@ router = APIRouter(tags=["signals"])
 @router.get("/signals")
 async def list_signals(
     limit: int = Query(50, ge=1, le=500),
+    offset: int = Query(0, ge=0),
     min_score: int = Query(0, ge=0, le=100),
     market_id: str | None = Query(None),
     wallet: str | None = Query(None),
@@ -56,12 +59,17 @@ async def list_signals(
             s.funding_age_minutes,
             s.statistical_score,
             s.created_at,
+            -- enriched
+            s.ofi_score,
+            s.hours_to_resolution,
+            s.market_concentration,
             -- reasoning
             sr.classification,
             sr.tier1_confidence,
             sr.suspicion_score,
             sr.reasoning,
             sr.key_evidence,
+            sr.news_headlines,
             sr.tier1_model,
             sr.tier2_model,
             -- market
@@ -74,8 +82,9 @@ async def list_signals(
         WHERE {where_sql}
         ORDER BY s.created_at DESC
         LIMIT ?
+        OFFSET ?
         """,
-        [*params, limit],
+        [*params, limit, offset],
     ).fetchall()
 
     columns = [
@@ -83,8 +92,10 @@ async def list_signals(
         "size_usd", "trade_timestamp", "modified_z_score", "price_impact",
         "wallet_win_rate", "wallet_total_trades", "is_whitelisted",
         "funding_anomaly", "funding_age_minutes", "statistical_score",
-        "created_at", "classification", "tier1_confidence", "suspicion_score",
-        "reasoning", "key_evidence", "tier1_model", "tier2_model",
+        "created_at",
+        "ofi_score", "hours_to_resolution", "market_concentration",
+        "classification", "tier1_confidence", "suspicion_score",
+        "reasoning", "key_evidence", "news_headlines", "tier1_model", "tier2_model",
         "market_question", "category", "market_liquidity",
     ]
 
@@ -93,12 +104,22 @@ async def list_signals(
         d = dict(zip(columns, row))
         # Coerce Decimal/datetime to JSON-friendly types
         for k in ("price", "size_usd", "modified_z_score", "price_impact",
-                   "wallet_win_rate", "market_liquidity"):
+                   "wallet_win_rate", "market_liquidity",
+                   "ofi_score", "market_concentration"):
             if d[k] is not None:
                 d[k] = float(d[k])
         for k in ("trade_timestamp", "created_at"):
             if d[k] is not None:
                 d[k] = d[k].isoformat()
+        # Parse news_headlines from stored JSON string to list
+        raw_headlines = d.get("news_headlines")
+        if raw_headlines:
+            try:
+                d["news_headlines"] = json.loads(raw_headlines)
+            except (json.JSONDecodeError, TypeError):
+                d["news_headlines"] = []
+        else:
+            d["news_headlines"] = []
         result.append(d)
 
     return result

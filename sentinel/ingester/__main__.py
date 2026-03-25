@@ -24,7 +24,7 @@ import structlog
 from sentinel.config import settings
 from sentinel.db.init import init_schema
 from sentinel.ingester.listener import Listener
-from sentinel.ingester.markets import sync_markets, fetch_active_asset_ids, fetch_active_markets, get_all_condition_ids
+from sentinel.ingester.markets import sync_markets, fetch_active_asset_ids, fetch_active_markets, fetch_market_by_id, get_all_condition_ids, upsert_markets
 from sentinel.ingester.models import BookEvent, Trade
 from sentinel.ingester.poller import TradePoller
 from sentinel.ingester.writer import BatchWriter
@@ -34,6 +34,37 @@ from sentinel.scanner.pipeline import Scanner
 from sentinel.scanner.scorer import Signal
 
 logger = structlog.get_logger()
+
+
+async def _on_demand_market_resolver(
+    conn: object,
+    unknown_queue: asyncio.Queue[str],
+) -> None:
+    """Background task: fetch metadata for market_ids not yet in the DB.
+
+    Drains the queue, deduplicates, fetches from the REST API, and upserts
+    into the ``markets`` table.  Rate-limited to one fetch per second to
+    avoid hammering the API.
+    """
+    pending: set[str] = set()
+    while True:
+        market_id = await unknown_queue.get()
+        if market_id in pending:
+            unknown_queue.task_done()
+            continue
+        pending.add(market_id)
+        try:
+            raw = await fetch_market_by_id(market_id)
+            if raw:
+                upsert_markets(conn, [raw])  # type: ignore[arg-type]
+                logger.info("On-demand market metadata fetched", market_id=market_id)
+            else:
+                logger.debug("Market not found via REST", market_id=market_id)
+        except Exception as exc:
+            logger.warning("On-demand market fetch failed", market_id=market_id, error=str(exc))
+        finally:
+            unknown_queue.task_done()
+        await asyncio.sleep(1.0)  # gentle rate limit
 
 
 async def _periodic_market_sync(conn: object, interval_hours: int) -> None:
@@ -111,6 +142,30 @@ async def run_ingester(
         dry_run=dry_run,
     )
 
+    # Track market_ids already in the DB to detect unknown ones on-the-fly
+    _known_market_ids: set[str] = set()
+    _unknown_market_queue: asyncio.Queue[str] = asyncio.Queue()
+
+    if not dry_run and conn is not None:
+        try:
+            rows = conn.execute("SELECT market_id FROM markets").fetchall()
+            _known_market_ids = {r[0] for r in rows}
+        except Exception as exc:
+            logger.warning(
+                "Failed to preload market IDs from DB — on-demand resolver will handle them",
+                error=str(exc),
+            )
+
+    _market_ids_lock = asyncio.Lock()
+
+    async def _on_trade(trade: Trade) -> None:
+        if not dry_run:
+            async with _market_ids_lock:
+                if trade.market_id not in _known_market_ids:
+                    _known_market_ids.add(trade.market_id)
+                    await _unknown_market_queue.put(trade.market_id)
+        await writer.add(trade)
+
     # Book event handler — forward to scanner queue (no DB persistence)
     book_event_count = 0
 
@@ -142,14 +197,14 @@ async def run_ingester(
             asset_ids = []
 
     listener = Listener(
-        on_trade=writer.add,
+        on_trade=_on_trade,
         on_book_event=_on_book_event,
         asset_ids=asset_ids,
         dry_run=dry_run,
     )
 
     poller = TradePoller(
-        on_trade=writer.add,
+        on_trade=_on_trade,
         condition_ids=condition_ids,
         dry_run=dry_run,
     )
@@ -171,6 +226,14 @@ async def run_ingester(
             poller.update_cold_markets(all_ids)
         except Exception as exc:
             logger.warning("Failed to load cold-tier markets", error=str(exc))
+
+        # On-demand resolver for unknown market_ids seen in trades
+        tasks.append(
+            asyncio.create_task(
+                _on_demand_market_resolver(conn, _unknown_market_queue),
+                name="market_resolver",
+            )
+        )
 
         # Periodic re-sync
         tasks.append(
@@ -248,16 +311,34 @@ async def run_ingester(
     except asyncio.CancelledError:
         pass
     finally:
+        # 1. Stop producers — no new trades/events enter the pipeline
         listener.stop()
         poller.stop()
+
+        # 2. Flush the batch writer — remaining buffered trades → DB
+        await writer.flush()
+
+        # 3. Drain queues so in-flight signals finish processing
+        drain_timeout = 30.0
+        drain_awaitables = [asyncio.wait_for(scanner_queue.join(), timeout=drain_timeout)]
+        if judge is not None:
+            drain_awaitables.append(asyncio.wait_for(judge_queue.join(), timeout=drain_timeout))
+        drain_results = await asyncio.gather(*drain_awaitables, return_exceptions=True)
+        for result in drain_results:
+            if isinstance(result, asyncio.TimeoutError):
+                logger.warning("Queue drain timed out — some in-flight signals may be lost")
+
+        # 4. Stop consumers
         if scanner is not None:
             scanner.stop()
         if judge is not None:
             judge.stop()
-        # Final flush of any remaining trades
-        await writer.flush()
+
+        # 5. Cancel remaining background tasks and wait for them to finish
         for t in tasks:
             t.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+
         logger.info(
             "Ingester stopped",
             total_trades=writer.total_written,

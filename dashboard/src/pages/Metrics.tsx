@@ -15,7 +15,14 @@ import {
   CartesianGrid,
   Legend,
 } from 'recharts'
-import { useTimeseries, useMetricsOverview, useBudget, useIngestion } from '../hooks/queries'
+import {
+  useTimeseries,
+  useMetricsOverview,
+  useBudget,
+  useIngestion,
+  useMetricsAccuracy,
+  useMetricsPatterns,
+} from '../hooks/queries'
 import { fmtNum } from '../lib/format'
 
 const RANGE_OPTIONS = [
@@ -33,9 +40,10 @@ export default function Metrics() {
   const { data: overview } = useMetricsOverview()
   const { data: budget } = useBudget()
   const { data: ingestion } = useIngestion()
+  const { data: accuracy = [] } = useMetricsAccuracy()
+  const { data: patterns = [] } = useMetricsPatterns()
   const navigate = useNavigate()
 
-  // Format time labels for chart
   const chartData = timeseries.map((p) => ({
     ...p,
     label: new Date(p.bucket).toLocaleTimeString('en-US', {
@@ -49,11 +57,13 @@ export default function Metrics() {
   const classification = overview?.classification ?? {}
   const scoreDist = overview?.score_distribution ?? {}
   const topMarkets = overview?.top_markets ?? []
+  const t2cov = overview?.tier2_coverage ?? { real: 0, fallback: 0, total: 0 }
 
-  // Budget gauge
   const t1Used = budget?.tier1.calls_used ?? 0
   const t1Limit = budget?.tier1.calls_limit ?? 1
   const t1Pct = Math.min(100, Math.round((t1Used / t1Limit) * 100))
+
+  const t2CovPct = t2cov.total > 0 ? Math.round((t2cov.real / t2cov.total) * 100) : null
 
   return (
     <div className="px-5 py-4 space-y-5 max-w-[1600px] mx-auto">
@@ -94,7 +104,7 @@ export default function Metrics() {
         ) : (
           <div className="h-56">
             <ResponsiveContainer width="100%" height="100%">
-              <LineChart data={chartData} margin={{ top: 4, right: 16, bottom: 0, left: 0 }}>
+              <LineChart data={chartData} margin={{ top: 4, right: 48, bottom: 0, left: 0 }}>
                 <CartesianGrid strokeDasharray="3 3" stroke="#1e1e1e" vertical={false} />
                 <XAxis
                   dataKey="label"
@@ -103,10 +113,21 @@ export default function Metrics() {
                   tickLine={false}
                   interval="preserveStartEnd"
                 />
+                {/* Left axis: trade volume */}
                 <YAxis
-                  tick={{ fill: '#525252', fontSize: 10 }}
+                  yAxisId="trades"
+                  tick={{ fill: '#404040', fontSize: 10 }}
                   axisLine={false}
                   tickLine={false}
+                />
+                {/* Right axis: signals / llm / alerts */}
+                <YAxis
+                  yAxisId="events"
+                  orientation="right"
+                  tick={{ fill: '#404040', fontSize: 10 }}
+                  axisLine={false}
+                  tickLine={false}
+                  allowDecimals={false}
                 />
                 <Tooltip
                   contentStyle={{
@@ -122,38 +143,11 @@ export default function Metrics() {
                   wrapperStyle={{ fontSize: '11px', color: '#737373' }}
                   iconType="plainline"
                 />
-                <Line
-                  type="monotone"
-                  dataKey="trades"
-                  stroke="#525252"
-                  strokeWidth={1.5}
-                  dot={false}
-                  name="Trades"
-                />
-                <Line
-                  type="monotone"
-                  dataKey="signals"
-                  stroke="#f59e0b"
-                  strokeWidth={1.5}
-                  dot={false}
-                  name="Signals"
-                />
-                <Line
-                  type="monotone"
-                  dataKey="llm_t1"
-                  stroke="#3b82f6"
-                  strokeWidth={1.5}
-                  dot={false}
-                  name="LLM T1"
-                />
-                <Line
-                  type="monotone"
-                  dataKey="alerts"
-                  stroke="#ef4444"
-                  strokeWidth={2}
-                  dot={false}
-                  name="Alerts (≥80)"
-                />
+                <Line yAxisId="trades" type="monotone" dataKey="trades" stroke="#525252" strokeWidth={1.5} dot={false} name="Trades" />
+                <Line yAxisId="events" type="monotone" dataKey="signals" stroke="#f59e0b" strokeWidth={1.5} dot={false} name="Signals" />
+                <Line yAxisId="events" type="monotone" dataKey="llm_t1" stroke="#3b82f6" strokeWidth={1.5} dot={false} name="LLM T1" />
+                <Line yAxisId="events" type="monotone" dataKey="llm_t2" stroke="#8b5cf6" strokeWidth={1.5} dot={false} name="LLM T2" strokeDasharray="4 2" />
+                <Line yAxisId="events" type="monotone" dataKey="alerts" stroke="#ef4444" strokeWidth={2} dot={false} name="Alerts (≥80)" />
               </LineChart>
             </ResponsiveContainer>
           </div>
@@ -162,7 +156,6 @@ export default function Metrics() {
 
       {/* ── Row 1b: Ingestion Source Breakdown ────────────────────── */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-        {/* Source stat cards */}
         <IngestionCard
           label="Trades (Today)"
           value={ingestion?.totals?.today}
@@ -183,7 +176,7 @@ export default function Metrics() {
         <IngestionCard
           label="Unique Wallets (Today)"
           value={ingestion?.wallets_active_today}
-          sub={null}
+          sub={undefined}
         />
       </div>
 
@@ -230,13 +223,7 @@ export default function Metrics() {
                   }}
                   labelStyle={{ color: '#737373' }}
                 />
-                <Area
-                  type="monotone"
-                  dataKey="trades"
-                  stroke="#3b82f6"
-                  fill="#1e3a5f"
-                  name="Trades"
-                />
+                <Area type="monotone" dataKey="trades" stroke="#3b82f6" fill="#1e3a5f" name="Trades" />
               </AreaChart>
             </ResponsiveContainer>
           </div>
@@ -331,36 +318,154 @@ export default function Metrics() {
                 })()}
               </div>
             </div>
+            <div className="w-full mt-3">
+              <div className="h-2 bg-surface-3 rounded-full overflow-hidden flex">
+                {(() => {
+                  const total = (classification['INFORMED'] ?? 0) + (classification['NOISE'] ?? 0)
+                  if (total === 0) return null
+                  const informedPct = Math.round(((classification['INFORMED'] ?? 0) / total) * 100)
+                  return (
+                    <>
+                      <div className="h-full bg-red-500 transition-all" style={{ width: `${informedPct}%` }} />
+                      <div className="h-full bg-neutral-600 transition-all flex-1" />
+                    </>
+                  )
+                })()}
+              </div>
+              <div className="flex justify-between text-[10px] text-neutral-600 mt-1">
+                <span>INFORMED</span>
+                <span>NOISE</span>
+              </div>
+            </div>
+            {/* T2 Coverage */}
+            {t2cov.total > 0 && (
+              <div className="mt-3 pt-3 border-t border-border-subtle">
+                <div className="text-[10px] uppercase tracking-wider text-neutral-600 mb-1">
+                  T2 Coverage (Today)
+                </div>
+                <div className="flex items-center gap-3">
+                  <div className="flex-1 h-1.5 bg-surface-3 rounded-full overflow-hidden flex">
+                    <div
+                      className="h-full bg-purple-500 transition-all"
+                      style={{ width: `${t2CovPct ?? 0}%` }}
+                    />
+                  </div>
+                  <span className="font-mono text-[11px] text-neutral-400 shrink-0">
+                    {t2CovPct ?? 0}% real · {t2cov.fallback} fallback
+                  </span>
+                </div>
+              </div>
+            )}
           </div>
 
           {/* LLM Budget Gauge */}
           <div className="bg-surface-1 border border-border-subtle rounded-sm p-4">
             <div className="text-[11px] uppercase tracking-wider text-neutral-500 mb-3">
-              LLM Budget — T1 (Today)
+              LLM Budget (Today)
             </div>
-            <div className="flex items-center gap-3">
-              <div className="flex-1">
-                <div className="h-3 bg-surface-3 rounded-full overflow-hidden">
-                  <div
-                    className={`h-full rounded-full transition-all ${
-                      t1Pct > 80 ? 'bg-red-500' : t1Pct > 50 ? 'bg-amber-500' : 'bg-emerald-500'
-                    }`}
-                    style={{ width: `${t1Pct}%` }}
-                  />
+            {/* T1 */}
+            <div className="mb-2">
+              <div className="flex items-center gap-3">
+                <span className="text-[10px] text-neutral-600 w-4">T1</span>
+                <div className="flex-1">
+                  <div className="h-2.5 bg-surface-3 rounded-full overflow-hidden">
+                    <div
+                      className={`h-full rounded-full transition-all ${
+                        t1Pct > 80 ? 'bg-red-500' : t1Pct > 50 ? 'bg-amber-500' : 'bg-emerald-500'
+                      }`}
+                      style={{ width: `${t1Pct}%` }}
+                    />
+                  </div>
                 </div>
+                <span className="font-mono text-xs text-neutral-400 w-16 text-right">
+                  {t1Used}/{t1Limit}
+                </span>
               </div>
-              <span className="font-mono text-sm text-neutral-300 w-24 text-right">
-                {t1Used}/{t1Limit}
-              </span>
             </div>
-            <div className="text-[11px] text-neutral-600 mt-1.5">
-              {t1Pct}% used · {t1Limit - t1Used} calls remaining
-            </div>
+            {/* T2 */}
+            {(() => {
+              const t2Used = budget?.tier2.calls_used ?? 0
+              const t2Limit = budget?.tier2.calls_limit ?? 1
+              const t2Pct = Math.min(100, Math.round((t2Used / t2Limit) * 100))
+              return (
+                <div>
+                  <div className="flex items-center gap-3">
+                    <span className="text-[10px] text-neutral-600 w-4">T2</span>
+                    <div className="flex-1">
+                      <div className="h-2.5 bg-surface-3 rounded-full overflow-hidden">
+                        <div
+                          className={`h-full rounded-full transition-all ${
+                            t2Pct > 80 ? 'bg-red-500' : t2Pct > 50 ? 'bg-amber-500' : 'bg-purple-500'
+                          }`}
+                          style={{ width: `${t2Pct}%` }}
+                        />
+                      </div>
+                    </div>
+                    <span className="font-mono text-xs text-neutral-400 w-16 text-right">
+                      {t2Used}/{t2Limit}
+                    </span>
+                  </div>
+                </div>
+              )
+            })()}
           </div>
         </div>
       </div>
 
-      {/* ── Row 3: Top Flagged Markets ───────────────────────────── */}
+      {/* ── Row 3: Hour-of-Day Pattern Chart ─────────────────────── */}
+      {patterns.length > 0 && (
+        <div className="bg-surface-1 border border-border-subtle rounded-sm p-4">
+          <div className="text-[11px] uppercase tracking-wider text-neutral-500 mb-1">
+            Hour-of-Day Trading Patterns (7d)
+          </div>
+          <div className="text-[10px] text-neutral-600 mb-3">
+            Trades, signals, and INFORMED classifications by UTC hour
+          </div>
+          <div className="h-44">
+            <ResponsiveContainer width="100%" height="100%">
+              <BarChart
+                data={patterns.map((p) => ({
+                  ...p,
+                  label: `${String(p.hour).padStart(2, '0')}:00`,
+                }))}
+                margin={{ top: 4, right: 4, bottom: 0, left: 0 }}
+                barCategoryGap="20%"
+              >
+                <CartesianGrid strokeDasharray="3 3" stroke="#1e1e1e" vertical={false} />
+                <XAxis
+                  dataKey="label"
+                  tick={{ fill: '#525252', fontSize: 9 }}
+                  axisLine={{ stroke: '#1e1e1e' }}
+                  tickLine={false}
+                  interval={3}
+                />
+                <YAxis
+                  tick={{ fill: '#525252', fontSize: 10 }}
+                  axisLine={false}
+                  tickLine={false}
+                  allowDecimals={false}
+                />
+                <Tooltip
+                  contentStyle={{
+                    background: '#191919',
+                    border: '1px solid #2a2a2a',
+                    borderRadius: '3px',
+                    fontSize: '11px',
+                    color: '#d4d4d4',
+                  }}
+                  labelStyle={{ color: '#737373' }}
+                />
+                <Legend wrapperStyle={{ fontSize: '11px', color: '#737373' }} iconType="square" />
+                <Bar dataKey="trades" fill="#404040" name="Trades" maxBarSize={16} />
+                <Bar dataKey="signals" fill="#f59e0b" name="Signals" maxBarSize={16} />
+                <Bar dataKey="informed" fill="#ef4444" name="INFORMED" maxBarSize={16} />
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
+        </div>
+      )}
+
+      {/* ── Row 4: Top Flagged Markets ───────────────────────────── */}
       <div className="bg-surface-1 border border-border-subtle rounded-sm">
         <div className="px-4 py-3 border-b border-border-subtle">
           <span className="text-[11px] uppercase tracking-wider text-neutral-500">
@@ -406,15 +511,9 @@ export default function Metrics() {
                         <span className="text-neutral-600">—</span>
                       )}
                     </td>
-                    <td className="py-2 px-4 text-right font-mono text-amber-400">
-                      {m.signal_count}
-                    </td>
-                    <td className="py-2 px-4 text-right font-mono text-neutral-300">
-                      {m.max_score ?? '—'}
-                    </td>
-                    <td className="py-2 px-4 text-right font-mono text-neutral-400">
-                      {m.avg_score ?? '—'}
-                    </td>
+                    <td className="py-2 px-4 text-right font-mono text-amber-400">{m.signal_count}</td>
+                    <td className="py-2 px-4 text-right font-mono text-neutral-300">{m.max_score ?? '—'}</td>
+                    <td className="py-2 px-4 text-right font-mono text-neutral-400">{m.avg_score ?? '—'}</td>
                   </tr>
                 ))}
               </tbody>
@@ -422,6 +521,74 @@ export default function Metrics() {
           </div>
         )}
       </div>
+
+      {/* ── Row 5: Classification Accuracy (Resolved Markets) ────── */}
+      {accuracy.length > 0 && (
+        <div className="bg-surface-1 border border-border-subtle rounded-sm">
+          <div className="px-4 py-3 border-b border-border-subtle flex items-center justify-between">
+            <span className="text-[11px] uppercase tracking-wider text-neutral-500">
+              Classification Accuracy — Resolved Markets
+            </span>
+            <span className="text-[10px] text-neutral-600">
+              INFORMED prediction correctness vs. actual outcome
+            </span>
+          </div>
+          <div className="overflow-x-auto">
+            <table className="w-full text-xs">
+              <thead>
+                <tr className="border-b border-border-subtle text-neutral-500 text-left">
+                  <th className="py-2 px-4 font-medium">Market</th>
+                  <th className="py-2 px-4 font-medium">Outcome</th>
+                  <th className="py-2 px-4 font-medium text-right">Signals</th>
+                  <th className="py-2 px-4 font-medium text-right">INFORMED</th>
+                  <th className="py-2 px-4 font-medium text-right">Correct</th>
+                  <th className="py-2 px-4 font-medium text-right">Accuracy</th>
+                </tr>
+              </thead>
+              <tbody>
+                {accuracy.map((m) => {
+                  const resolved = m.resolved_price != null
+                    ? m.resolved_price >= 0.95 ? 'YES' : m.resolved_price <= 0.05 ? 'NO' : `${Math.round(m.resolved_price * 100)}¢`
+                    : '—'
+                  const acc = m.accuracy_pct
+                  return (
+                    <tr
+                      key={m.market_id}
+                      className="border-b border-border-subtle hover:bg-surface-2 transition-colors cursor-pointer"
+                      onClick={() => navigate(`/market/${m.market_id}`)}
+                    >
+                      <td className="py-2 px-4 max-w-[400px] truncate text-neutral-300">
+                        {m.question
+                          ? m.question.length > 60 ? m.question.slice(0, 60) + '…' : m.question
+                          : m.market_id.slice(0, 16) + '…'}
+                      </td>
+                      <td className="py-2 px-4">
+                        <span className={`font-mono font-medium ${
+                          resolved === 'YES' ? 'text-emerald-400' : resolved === 'NO' ? 'text-red-400' : 'text-neutral-500'
+                        }`}>
+                          {resolved}
+                        </span>
+                      </td>
+                      <td className="py-2 px-4 text-right font-mono text-neutral-400">{m.signal_count}</td>
+                      <td className="py-2 px-4 text-right font-mono text-neutral-400">{m.informed_count}</td>
+                      <td className="py-2 px-4 text-right font-mono text-neutral-400">{m.correct_informed}</td>
+                      <td className="py-2 px-4 text-right font-mono">
+                        {acc != null ? (
+                          <span className={acc >= 70 ? 'text-emerald-400' : acc >= 40 ? 'text-amber-400' : 'text-red-400'}>
+                            {acc}%
+                          </span>
+                        ) : (
+                          <span className="text-neutral-600">—</span>
+                        )}
+                      </td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

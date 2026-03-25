@@ -18,12 +18,17 @@ export interface Signal {
   funding_age_minutes: number | null
   statistical_score: number
   created_at: string
+  // Enriched signals (sprint 4)
+  ofi_score: number | null
+  hours_to_resolution: number | null
+  market_concentration: number | null
   // Reasoning (may be null if Judge hasn't processed yet)
   classification: 'INFORMED' | 'NOISE' | null
   tier1_confidence: number | null
   suspicion_score: number | null
   reasoning: string | null
   key_evidence: string | null
+  news_headlines: string[]
   tier1_model: string | null
   tier2_model: string | null
   // Market metadata
@@ -135,6 +140,43 @@ export interface MetricsOverview {
   classification: Record<string, number>
   score_distribution: Record<string, number>
   top_markets: TopMarket[]
+  tier2_coverage: { real: number; fallback: number; total: number }
+}
+
+export interface AnomalyPoint {
+  hour: string
+  volume_usd: number
+  trade_count: number
+  z_score: number
+}
+
+export interface WalletLeader {
+  wallet: string
+  resolved_trades: number
+  wins: number
+  win_rate: number
+  total_trades: number
+  signal_count: number
+  signal_hit_rate: number
+}
+
+export interface MarketAccuracy {
+  market_id: string
+  question: string | null
+  category: string | null
+  resolved_price: number | null
+  signal_count: number
+  informed_count: number
+  noise_count: number
+  correct_informed: number
+  accuracy_pct: number | null
+}
+
+export interface HourPattern {
+  hour: number
+  trades: number
+  signals: number
+  informed: number
 }
 
 export interface TopMarket {
@@ -147,15 +189,14 @@ export interface TopMarket {
 }
 
 export interface IngestionMetrics {
-  sources: Record<string, { total: number; today: number }>
   totals: { all_time: number; today: number }
-  latest: { ws: string | null; rest: string | null }
+  latest: { rest: string | null }
   markets_active_today: number
+  wallets_active_today: number
   hourly: IngestionHourly[]
 }
 
 export interface IngestionHourly {
   bucket: string
-  ws: number
-  rest: number
+  trades: number
 }

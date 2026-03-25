@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import re
+import threading
 import time
 from dataclasses import dataclass
 from typing import Any
@@ -34,6 +35,7 @@ class ReasoningResult:
     model: str
     input_tokens: int
     output_tokens: int
+    is_fallback: bool = False
 
 
 # ── Prompt construction ─────────────────────────────────────────────────────
@@ -150,16 +152,23 @@ def _result_from_dict(obj: dict[str, Any], *, model: str) -> ReasoningResult:
 # ── Bedrock invocation ─────────────────────────────────────────────────────
 
 
-def _get_bedrock_client() -> Any:
-    """Create a boto3 bedrock-runtime client."""
-    import boto3
+_bedrock_client: Any = None
+_bedrock_client_lock = threading.Lock()
 
-    return boto3.client(
-        "bedrock-runtime",
-        region_name=settings.aws_region,
-        aws_access_key_id=settings.aws_access_key_id,
-        aws_secret_access_key=settings.aws_secret_access_key,
-    )
+
+def _get_bedrock_client() -> Any:
+    """Return a module-level singleton boto3 bedrock-runtime client.
+
+    Credentials are resolved via the boto3 default chain (env vars →
+    IAM instance profile → ~/.aws/credentials).
+    """
+    global _bedrock_client
+    if _bedrock_client is None:
+        with _bedrock_client_lock:
+            if _bedrock_client is None:
+                import boto3
+                _bedrock_client = boto3.client("bedrock-runtime", region_name=settings.aws_region)
+    return _bedrock_client
 
 
 async def reason(
@@ -228,6 +237,13 @@ async def reason(
             latency_s=f"{latency:.2f}",
         )
         # Timeout / error → fall back to Tier 1 confidence as suspicion score
+        logger.error(
+            "Bedrock Tier 2 failed — using T1 fallback score",
+            error=str(exc),
+            error_type=type(exc).__name__,
+            signal_id=signal.signal_id,
+            fallback_score=t1_result.confidence,
+        )
         return ReasoningResult(
             suspicion_score=t1_result.confidence,
             reasoning=f"Tier 2 failed ({exc}); using Tier 1 confidence as fallback.",
@@ -235,6 +251,7 @@ async def reason(
             model=model_id,
             input_tokens=0,
             output_tokens=0,
+            is_fallback=True,
         )
 
     latency = time.monotonic() - t0

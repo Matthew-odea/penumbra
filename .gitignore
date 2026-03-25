@@ -227,3 +227,10 @@ dashboard/dist/
 # IDE
 .idea/
 .vscode/settings.json
+
+# Terraform
+terraform/.terraform/
+terraform/*.tfstate
+terraform/*.tfstate.backup
+terraform/.terraform.lock.hcl
+terraform/secrets.tfvars

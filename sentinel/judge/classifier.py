@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import re
+import threading
 import time
 from dataclasses import dataclass
 from typing import Any
@@ -181,17 +182,24 @@ def _result_from_dict(obj: dict[str, Any], *, model: str) -> ClassificationResul
 
 # ── Bedrock invocation ─────────────────────────────────────────────────────
 
+_bedrock_client: Any = None
+_bedrock_client_lock = threading.Lock()
+
 
 def _get_bedrock_client() -> Any:
-    """Create a boto3 bedrock-runtime client."""
-    import boto3
+    """Return a module-level singleton boto3 bedrock-runtime client.
 
-    return boto3.client(
-        "bedrock-runtime",
-        region_name=settings.aws_region,
-        aws_access_key_id=settings.aws_access_key_id,
-        aws_secret_access_key=settings.aws_secret_access_key,
-    )
+    Credentials are resolved via the boto3 default chain (env vars →
+    IAM instance profile → ~/.aws/credentials), which supports local dev,
+    EC2/ECS IAM roles, and GitHub OIDC in CI without hardcoding secrets.
+    """
+    global _bedrock_client
+    if _bedrock_client is None:
+        with _bedrock_client_lock:
+            if _bedrock_client is None:
+                import boto3
+                _bedrock_client = boto3.client("bedrock-runtime", region_name=settings.aws_region)
+    return _bedrock_client
 
 
 async def classify(

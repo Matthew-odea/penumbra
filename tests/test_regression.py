@@ -311,9 +311,9 @@ class TestSignalPersistence:
         assert count == 1
 
     def test_signal_as_db_tuple_length(self):
-        """The tuple must match the INSERT column count (18)."""
+        """The tuple must match the INSERT column count (21)."""
         sig = _make_signal()
-        assert len(sig.as_db_tuple()) == 18
+        assert len(sig.as_db_tuple()) == 21
 
     def test_signal_as_dict_keys(self):
         sig = _make_signal()

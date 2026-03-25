@@ -76,6 +76,44 @@ class BudgetManager:
         )
         logger.debug("Budget call recorded", tier=tier, date=str(today))
 
+    def try_record_call(self, tier: str) -> bool:
+        """Atomically check budget and increment if available.
+
+        Returns True if a budget slot was consumed, False if exhausted.
+        Uses a SQL UPDATE ... WHERE calls_used < calls_limit RETURNING to
+        eliminate the TOCTOU race between can_call() and record_call() when
+        multiple workers run concurrently.
+        """
+        today = self._today()
+        limit = _TIER_LIMITS.get(tier, 0)
+
+        # Ensure the row exists for today (idempotent)
+        self.db.execute(
+            """
+            INSERT INTO llm_budget (date, tier, calls_used, calls_limit)
+            VALUES (?, ?, 0, ?)
+            ON CONFLICT (date, tier) DO NOTHING
+            """,
+            [today, tier, limit],
+        )
+
+        # Atomic check-and-increment: only updates if under limit
+        row = self.db.execute(
+            """
+            UPDATE llm_budget
+            SET calls_used = calls_used + 1
+            WHERE date = ? AND tier = ? AND calls_used < calls_limit
+            RETURNING calls_used
+            """,
+            [today, tier],
+        ).fetchone()
+
+        if row is None:
+            logger.warning("Budget exhausted", tier=tier, date=str(today))
+        else:
+            logger.debug("Budget call recorded", tier=tier, date=str(today), calls_used=row[0])
+        return row is not None
+
     def get_status(self) -> dict[str, BudgetStatus]:
         """Return current budget status for all tiers."""
         return {tier: self._status_for(tier) for tier in _TIER_LIMITS}

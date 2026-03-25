@@ -124,8 +124,7 @@ class Judge:
     async def _process_signal(self, signal: Signal) -> None:
         """Full reasoning flow for one signal."""
         # ── Budget gate ─────────────────────────────────────────────────
-        if self._budget and not self._budget.can_call("tier1"):
-            logger.warning("Tier 1 budget exhausted, skipping signal", signal_id=signal.signal_id)
+        if self._budget and not self._budget.try_record_call("tier1"):
             async with self._counter_lock:
                 self.skipped_budget += 1
             return
@@ -161,35 +160,46 @@ class Judge:
         )
         async with self._counter_lock:
             self.tier1_calls += 1
-        if self._budget:
-            self._budget.record_call("tier1")
 
         # ── Tier 2 reasoning (optional) ─────────────────────────────────
         t2_result: ReasoningResult | None = None
 
-        if (
-            t1_result.confidence >= settings.bedrock_tier2_min_suspicion
-            and self._budget
-            and self._budget.can_call("tier2")
-        ):
-            t2_result = await reason(
-                signal,
-                news_headlines=headlines_str,
-                t1_result=t1_result,
-                market_question=market_question,
-                category=category,
-            )
-            async with self._counter_lock:
-                self.tier2_calls += 1
-            if self._budget:
-                self._budget.record_call("tier2")
+        if t1_result.confidence >= settings.bedrock_tier2_min_suspicion:
+            if self._budget and not self._budget.try_record_call("tier2"):
+                logger.warning(
+                    "Tier 2 budget exhausted — score locked at T1 confidence",
+                    signal_id=signal.signal_id,
+                    t1_confidence=t1_result.confidence,
+                )
+            else:
+                t2_result = await reason(
+                    signal,
+                    news_headlines=headlines_str,
+                    t1_result=t1_result,
+                    market_question=market_question,
+                    category=category,
+                )
+                async with self._counter_lock:
+                    self.tier2_calls += 1
+
+        tier2_fallback = t2_result is not None and t2_result.is_fallback
 
         # ── Store results ───────────────────────────────────────────────
         if self.db:
-            store_reasoning(self.db, signal, t1_result, t2_result, headlines)
+            try:
+                store_reasoning(self.db, signal, t1_result, t2_result, headlines, tier2_fallback=tier2_fallback)
+            except Exception as exc:
+                logger.error(
+                    "Failed to store reasoning — signal will not appear in API",
+                    signal_id=signal.signal_id,
+                    error=str(exc),
+                )
+                async with self._counter_lock:
+                    self.signals_processed += 1
+                return
 
         # ── Alert emission ──────────────────────────────────────────────
-        alert = build_alert(signal, t1_result, t2_result)
+        alert = build_alert(signal, t1_result, t2_result, tier2_fallback=tier2_fallback)
         if alert:
             await self._alert_queue.put(alert)
             async with self._counter_lock:

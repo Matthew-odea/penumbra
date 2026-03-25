@@ -126,6 +126,32 @@ async def get_market_volume(
     ]
 
 
+@router.get("/markets/{market_id}/anomalies")
+async def get_market_anomalies(market_id: str) -> list[dict]:
+    """Volume anomaly Z-scores for a market (last 24h, from v_volume_anomalies)."""
+    db = get_db()
+
+    rows = db.execute(
+        """
+        SELECT hour_bucket, volume_usd, trade_count, modified_z_score
+        FROM v_volume_anomalies
+        WHERE market_id = ?
+        ORDER BY hour_bucket
+        """,
+        [market_id],
+    ).fetchall()
+
+    return [
+        {
+            "hour": r[0].isoformat(),
+            "volume_usd": float(r[1]) if r[1] else 0.0,
+            "trade_count": r[2],
+            "z_score": round(float(r[3]), 2) if r[3] else 0.0,
+        }
+        for r in rows
+    ]
+
+
 @router.get("/markets/{market_id}/signals")
 async def get_market_signals(
     market_id: str,
@@ -133,4 +159,4 @@ async def get_market_signals(
 ) -> list[dict]:
     """Signals for a specific market."""
     from sentinel.api.routes.signals import list_signals
-    return await list_signals(limit=limit, min_score=0, market_id=market_id, wallet=None)
+    return await list_signals(limit=limit, offset=0, min_score=0, market_id=market_id, wallet=None)

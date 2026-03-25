@@ -6,6 +6,7 @@ Use `from sentinel.config import settings` anywhere in the codebase.
 
 from pathlib import Path
 
+from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -43,14 +44,11 @@ class Settings(BaseSettings):
     # ── DuckDB ──────────────────────────────────────────────────────────────
     duckdb_path: Path = Path("data/sentinel.duckdb")
 
-    # ── Supabase ────────────────────────────────────────────────────────────
-    supabase_url: str = ""
-    supabase_anon_key: str = ""
-    supabase_service_key: str = ""
-
     # ── AWS Bedrock ─────────────────────────────────────────────────────────
-    aws_access_key_id: str = ""
-    aws_secret_access_key: str = ""
+    # Credentials are resolved via the boto3 default chain:
+    # env vars (AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY / AWS_SESSION_TOKEN)
+    # → IAM instance profile → ~/.aws/credentials
+    # This supports local dev, EC2/ECS IAM roles, and GitHub OIDC in CI.
     aws_region: str = "us-east-1"
     bedrock_tier1_model: str = "amazon.nova-lite-v1:0"
     bedrock_tier1_daily_limit: int = 5000
@@ -84,11 +82,23 @@ class Settings(BaseSettings):
     wallet_whitelist_win_rate: float = 0.65
     wallet_whitelist_min_trades: int = 20
 
-    # Scorer weight caps (points out of 100)
+    # Scorer weight caps (points out of 100) — must sum to 100
     scorer_weight_volume: int = 40
     scorer_weight_impact: int = 20
     scorer_weight_wallet: int = 20
     scorer_weight_funding: int = 20
+
+    @model_validator(mode="after")
+    def validate_scorer_weights(self) -> "Settings":
+        total = (
+            self.scorer_weight_volume
+            + self.scorer_weight_impact
+            + self.scorer_weight_wallet
+            + self.scorer_weight_funding
+        )
+        if total != 100:
+            raise ValueError(f"Scorer weights must sum to 100, got {total}")
+        return self
 
     # ── Ingester ────────────────────────────────────────────────────────────
     ingester_batch_size: int = 100

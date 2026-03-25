@@ -41,7 +41,7 @@ export default function SignalTable({ signals }: Props) {
           {signals.map((s) => {
             const score = s.suspicion_score ?? s.statistical_score
             const isExpanded = expanded === s.signal_id
-            const hasDetail = !!(s.reasoning || s.key_evidence)
+            const hasDetail = !!(s.reasoning || s.key_evidence || s.news_headlines?.length)
 
             return (
               <Fragment key={s.signal_id}>
@@ -149,14 +149,31 @@ export default function SignalTable({ signals }: Props) {
                   <tr className="bg-surface-2 border-b border-border-subtle">
                     <td colSpan={11} className="px-6 py-3">
                       <div className="grid grid-cols-2 gap-6 text-xs">
-                        {/* Left: Reasoning */}
-                        <div className="space-y-2">
-                          <div className="text-[10px] uppercase tracking-wider text-neutral-500">
-                            Reasoning
+                        {/* Left: Reasoning + News */}
+                        <div className="space-y-3">
+                          <div>
+                            <div className="text-[10px] uppercase tracking-wider text-neutral-500 mb-1">
+                              Reasoning
+                            </div>
+                            <p className="text-neutral-300 leading-relaxed whitespace-pre-wrap">
+                              {s.reasoning ?? 'No reasoning available.'}
+                            </p>
                           </div>
-                          <p className="text-neutral-300 leading-relaxed whitespace-pre-wrap">
-                            {s.reasoning ?? 'No reasoning available.'}
-                          </p>
+                          {s.news_headlines && s.news_headlines.length > 0 && (
+                            <div>
+                              <div className="text-[10px] uppercase tracking-wider text-neutral-500 mb-1">
+                                News Context
+                              </div>
+                              <ul className="space-y-0.5">
+                                {s.news_headlines.map((h, i) => (
+                                  <li key={i} className="text-neutral-500 leading-relaxed">
+                                    <span className="text-neutral-700 mr-1">{i + 1}.</span>
+                                    {h}
+                                  </li>
+                                ))}
+                              </ul>
+                            </div>
+                          )}
                         </div>
 
                         {/* Right: Metadata */}
@@ -169,13 +186,50 @@ export default function SignalTable({ signals }: Props) {
                               <p className="text-neutral-400">{s.key_evidence}</p>
                             </div>
                           )}
-                          <div className="flex gap-6">
+                          <div className="flex flex-wrap gap-6">
                             {s.tier1_confidence != null && (
                               <div>
                                 <div className="text-[10px] uppercase tracking-wider text-neutral-500 mb-0.5">
                                   T1 Confidence
                                 </div>
                                 <span className="font-mono text-neutral-300">{s.tier1_confidence}%</span>
+                              </div>
+                            )}
+                            {s.ofi_score != null && (
+                              <div>
+                                <div className="text-[10px] uppercase tracking-wider text-neutral-500 mb-0.5">
+                                  Flow Imbalance
+                                </div>
+                                <span className={`font-mono ${
+                                  s.ofi_score > 0.4 ? 'text-emerald-400'
+                                  : s.ofi_score < -0.4 ? 'text-red-400'
+                                  : 'text-neutral-500'
+                                }`}>
+                                  {s.ofi_score > 0 ? '+' : ''}{(s.ofi_score * 100).toFixed(0)}%
+                                  {Math.abs(s.ofi_score) >= 0.4 ? (s.ofi_score > 0 ? ' BUY' : ' SELL') : ' neutral'}
+                                </span>
+                              </div>
+                            )}
+                            {s.hours_to_resolution != null && (
+                              <div>
+                                <div className="text-[10px] uppercase tracking-wider text-neutral-500 mb-0.5">
+                                  Time to Resolve
+                                </div>
+                                <span className={`font-mono ${s.hours_to_resolution < 24 ? 'text-red-400' : s.hours_to_resolution < 72 ? 'text-amber-400' : 'text-neutral-500'}`}>
+                                  {s.hours_to_resolution < 24
+                                    ? `${s.hours_to_resolution}h`
+                                    : `${Math.round(s.hours_to_resolution / 24)}d`}
+                                </span>
+                              </div>
+                            )}
+                            {s.market_concentration != null && s.market_concentration > 0.3 && (
+                              <div>
+                                <div className="text-[10px] uppercase tracking-wider text-neutral-500 mb-0.5">
+                                  Concentration
+                                </div>
+                                <span className={`font-mono ${s.market_concentration >= 0.8 ? 'text-red-400' : s.market_concentration >= 0.5 ? 'text-amber-400' : 'text-neutral-500'}`}>
+                                  {Math.round(s.market_concentration * 100)}% this market
+                                </span>
                               </div>
                             )}
                             {s.funding_anomaly && (

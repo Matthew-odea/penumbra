@@ -12,6 +12,7 @@ Features:
 from __future__ import annotations
 
 import time
+from collections import OrderedDict
 from typing import Any
 
 import httpx
@@ -21,9 +22,11 @@ from sentinel.config import settings
 
 logger = structlog.get_logger()
 
-# ── In-memory cache ─────────────────────────────────────────────────────────
+# ── In-memory LRU cache ─────────────────────────────────────────────────────
 
-_cache: dict[str, tuple[float, list[str]]] = {}
+_MAX_NEWS_CACHE_SIZE = 1000
+_cache: OrderedDict[str, tuple[float, list[str]]] = OrderedDict()
+
 
 def _get_cache_ttl() -> float:
     """Get cache TTL from settings (with fallback to 12 hours)."""
@@ -40,18 +43,23 @@ def _cache_key(market_id: str) -> str:
 
 def _get_cached(market_id: str) -> list[str] | None:
     key = _cache_key(market_id)
-    entry = _cache.get(key)
-    if entry is None:
+    if key not in _cache:
         return None
-    ts, headlines = entry
+    ts, headlines = _cache[key]
     if time.monotonic() - ts > _get_cache_ttl():
         del _cache[key]
         return None
+    _cache.move_to_end(key)  # Mark as recently used
     return headlines
 
 
 def _set_cache(market_id: str, headlines: list[str]) -> None:
-    _cache[_cache_key(market_id)] = (time.monotonic(), headlines)
+    key = _cache_key(market_id)
+    if key in _cache:
+        _cache.move_to_end(key)
+    _cache[key] = (time.monotonic(), headlines)
+    if len(_cache) > _MAX_NEWS_CACHE_SIZE:
+        _cache.popitem(last=False)  # Evict least-recently-used
 
 
 def clear_cache() -> None:

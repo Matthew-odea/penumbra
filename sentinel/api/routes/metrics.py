@@ -197,11 +197,28 @@ async def overview() -> dict:
         for r in market_rows
     ]
 
+    # ── Tier 2 coverage (today) ─────────────────────────────────────
+    t2_row = db.execute("""
+        SELECT
+            COUNT(*) FILTER (WHERE tier2_used = TRUE)  AS real_t2,
+            COUNT(*) FILTER (WHERE tier2_used = FALSE) AS fallback,
+            COUNT(*)                                    AS total
+        FROM signal_reasoning
+        WHERE created_at >= CURRENT_DATE
+    """).fetchone()
+
+    tier2_coverage = {
+        "real": t2_row[0] if t2_row else 0,
+        "fallback": t2_row[1] if t2_row else 0,
+        "total": t2_row[2] if t2_row else 0,
+    }
+
     return {
         "funnel": funnel,
         "classification": classification,
         "score_distribution": score_distribution,
         "top_markets": top_markets,
+        "tier2_coverage": tier2_coverage,
     }
 
 
@@ -270,3 +287,94 @@ async def ingestion() -> dict:
         "wallets_active_today": latest_row[2] or 0,
         "hourly": hourly,
     }
+
+
+@router.get("/metrics/accuracy")
+async def accuracy() -> list[dict]:
+    """Classification accuracy on resolved markets.
+
+    For each resolved market that has signals, computes how well INFORMED
+    classifications predicted the outcome (BUY→YES, SELL→NO).
+    """
+    db = get_db()
+
+    rows = db.execute("""
+        SELECT
+            s.market_id,
+            m.question,
+            m.category,
+            m.resolved_price,
+            COUNT(*)                                                        AS signal_count,
+            COUNT(*) FILTER (WHERE sr.classification = 'INFORMED')          AS informed_count,
+            COUNT(*) FILTER (WHERE sr.classification = 'NOISE')             AS noise_count,
+            COUNT(*) FILTER (
+                WHERE sr.classification = 'INFORMED'
+                  AND (
+                      (s.side = 'BUY'  AND m.resolved_price >= 0.95) OR
+                      (s.side = 'SELL' AND m.resolved_price <= 0.05)
+                  )
+            )                                                               AS correct_informed
+        FROM signals s
+        JOIN signal_reasoning sr ON s.signal_id = sr.signal_id
+        JOIN markets m ON s.market_id = m.market_id
+        WHERE m.resolved = TRUE
+          AND m.resolved_price IS NOT NULL
+          AND sr.classification IS NOT NULL
+        GROUP BY s.market_id, m.question, m.category, m.resolved_price
+        HAVING COUNT(*) >= 1
+        ORDER BY signal_count DESC
+        LIMIT 30
+    """).fetchall()
+
+    result = []
+    for r in rows:
+        informed = r[5] or 0
+        correct = r[7] or 0
+        result.append({
+            "market_id": r[0],
+            "question": r[1],
+            "category": r[2],
+            "resolved_price": float(r[3]) if r[3] is not None else None,
+            "signal_count": r[4],
+            "informed_count": informed,
+            "noise_count": r[6] or 0,
+            "correct_informed": correct,
+            "accuracy_pct": round((correct / informed * 100)) if informed > 0 else None,
+        })
+    return result
+
+
+@router.get("/metrics/patterns")
+async def patterns() -> list[dict]:
+    """Hour-of-day trading patterns over the last 7 days.
+
+    Returns 24 buckets (hours 0-23) with trade counts, signal counts, and
+    INFORMED classification counts to reveal temporal anomaly patterns.
+    """
+    db = get_db()
+
+    rows = db.execute("""
+        SELECT
+            EXTRACT(hour FROM t.timestamp)::INTEGER                                    AS hour,
+            COUNT(*)                                                                    AS total_trades,
+            COUNT(DISTINCT s.signal_id)                                                AS signals,
+            COUNT(DISTINCT sr.signal_id) FILTER (WHERE sr.classification = 'INFORMED') AS informed
+        FROM trades t
+        LEFT JOIN signals s ON t.trade_id = s.trade_id
+        LEFT JOIN signal_reasoning sr ON s.signal_id = sr.signal_id
+        WHERE t.timestamp >= CURRENT_TIMESTAMP - INTERVAL '7 days'
+        GROUP BY 1
+        ORDER BY 1
+    """).fetchall()
+
+    # Ensure all 24 hours are present
+    by_hour = {r[0]: r for r in rows}
+    return [
+        {
+            "hour": h,
+            "trades": by_hour[h][1] if h in by_hour else 0,
+            "signals": by_hour[h][2] if h in by_hour else 0,
+            "informed": by_hour[h][3] if h in by_hour else 0,
+        }
+        for h in range(24)
+    ]
