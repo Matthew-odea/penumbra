@@ -160,7 +160,7 @@ SELECT
     active::BOOLEAN, resolved::BOOLEAN,
     NULLIF(last_price, '')::DOUBLE,
     NULLIF(last_synced, '')::TIMESTAMPTZ
-FROM read_csv({path!r}, columns={col_types!r}, header=true, quote='"')
+FROM read_csv({path!r}, columns={col_types!r}, header=true, quote='"', escape='"')
 ON CONFLICT (market_id) DO UPDATE SET
     question      = excluded.question,
     slug          = excluded.slug,

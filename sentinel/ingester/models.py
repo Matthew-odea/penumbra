@@ -116,7 +116,26 @@ IngesterEvent = Union[Trade, BookEvent]
 def parse_ws_trade(msg: dict) -> Trade | None:
     """Parse a raw WebSocket trade message into a ``Trade``.
 
-    Expected shape (``event_type == "trade"``):
+    Handles two formats emitted by Polymarket's ``/ws/market`` feed:
+
+    **Format 1** — ``event_type == "last_trade_price"`` (current format, flat):
+
+    .. code-block:: json
+
+        {
+          "event_type": "last_trade_price",
+          "market": "0x...",
+          "asset_id": "token_id",
+          "price": "0.083",
+          "size": "12.65",
+          "side": "BUY",
+          "fee_rate_bps": "0",
+          "timestamp": "1774526301100"
+        }
+
+    Timestamp is in **milliseconds**. No wallet address is provided.
+
+    **Format 2** — ``event_type == "trade"`` (legacy, nested):
 
     .. code-block:: json
 
@@ -137,7 +156,35 @@ def parse_ws_trade(msg: dict) -> Trade | None:
 
     Returns ``None`` when the message is not a trade or is malformed.
     """
-    if msg.get("event_type") != "trade":
+    event_type = msg.get("event_type")
+
+    # ── Format 1: current flat "last_trade_price" format ─────────────────
+    if event_type == "last_trade_price":
+        try:
+            ts_raw = msg.get("timestamp")
+            # Polymarket sends milliseconds; divide by 1000 for seconds
+            if ts_raw is not None:
+                ts = datetime.fromtimestamp(int(ts_raw) / 1000.0, tz=UTC)
+            else:
+                ts = datetime.now(UTC)
+            asset_id = str(msg.get("asset_id", ""))
+            trade_id = f"ws-{int(ts.timestamp())}-{asset_id[:8]}"
+            return Trade(
+                trade_id=trade_id,
+                market_id=str(msg["market"]),
+                asset_id=asset_id,
+                wallet="",  # not provided in this WS format
+                side=str(msg.get("side", "BUY")).upper(),
+                price=Decimal(str(msg["price"])),
+                size_usd=Decimal(str(msg["size"])),
+                timestamp=ts,
+                tx_hash=None,
+            )
+        except (KeyError, ValueError, TypeError, InvalidOperation):
+            return None
+
+    # ── Format 2: legacy nested "trade" format ────────────────────────────
+    if event_type != "trade":
         return None
 
     data = msg.get("data")
@@ -151,7 +198,6 @@ def parse_ws_trade(msg: dict) -> Trade | None:
         else:
             ts = datetime.now(UTC)
 
-        # trade_id: prefer "id", fall back to "trade_id", then generate
         trade_id = str(data.get("id") or data.get("trade_id") or f"ws-{ts.timestamp():.0f}-{data.get('asset_id', '')[:8]}")
 
         return Trade(
