@@ -81,11 +81,37 @@ async def _market_attractiveness_scorer(
 
                 # Gate on Bedrock budget — market scoring shares the tier1 pool
                 if not budget.try_record_call("tier1"):
+                    # Budget exhausted for today.  Drain the rest of the queue
+                    # without any DuckDB reads (avoids blocking the event loop
+                    # for 30k synchronous SELECT calls), then sleep until the
+                    # budget resets at midnight UTC.
+                    remaining = queue.qsize()
                     logger.warning(
-                        "Market scoring budget exhausted — skipping",
+                        "Market scoring budget exhausted — draining queue and sleeping",
                         market_id=market_id,
                         worker_id=worker_id,
+                        queue_remaining=remaining,
                     )
+                    # Drain quickly without DB work
+                    while True:
+                        try:
+                            queue.get_nowait()
+                            queue.task_done()
+                        except asyncio.QueueEmpty:
+                            break
+                    # Sleep until midnight UTC (budget reset)
+                    from datetime import timedelta
+                    _now = datetime.now(UTC)
+                    _reset = (_now.replace(
+                        hour=0, minute=0, second=0, microsecond=0,
+                    ) + timedelta(days=1))
+                    _sleep = max((_reset - _now).total_seconds(), 60)
+                    logger.info(
+                        "Market scoring paused until budget reset",
+                        resume_utc=_reset.isoformat(),
+                        sleep_hours=round(_sleep / 3600, 1),
+                    )
+                    await asyncio.sleep(_sleep)
                     continue
 
                 question, category, end_date, liquidity_usd, _ = row
