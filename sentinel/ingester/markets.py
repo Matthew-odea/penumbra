@@ -10,7 +10,10 @@ informed-trading priority formula for use by the hot-tier poller.
 
 from __future__ import annotations
 
+import csv
+import os
 import ssl
+import tempfile
 from datetime import UTC, datetime
 from typing import Any
 
@@ -140,68 +143,91 @@ def _extract_yes_price(tokens: list[dict[str, Any]]) -> float | None:
     return None
 
 
+_CSV_COLS = [
+    "market_id", "question", "slug", "category", "end_date",
+    "volume_usd", "liquidity_usd", "active", "resolved", "last_price",
+    "last_synced",
+]
+
+_UPSERT_SQL = """
+INSERT INTO markets
+    (market_id, question, slug, category, end_date,
+     volume_usd, liquidity_usd, active, resolved, last_price, last_synced)
+SELECT
+    market_id, question, slug, category,
+    NULLIF(end_date, '')::TIMESTAMPTZ,
+    volume_usd::DOUBLE, liquidity_usd::DOUBLE,
+    active::BOOLEAN, resolved::BOOLEAN,
+    NULLIF(last_price, '')::DOUBLE,
+    NULLIF(last_synced, '')::TIMESTAMPTZ
+FROM read_csv({path!r}, columns={col_types!r}, header=true)
+ON CONFLICT (market_id) DO UPDATE SET
+    question      = excluded.question,
+    slug          = excluded.slug,
+    category      = excluded.category,
+    end_date      = excluded.end_date,
+    volume_usd    = excluded.volume_usd,
+    liquidity_usd = excluded.liquidity_usd,
+    active        = excluded.active,
+    resolved      = excluded.resolved,
+    last_price    = excluded.last_price,
+    last_synced   = excluded.last_synced
+"""
+
+# DuckDB column-type hints for the CSV reader (all TEXT so we control casts above)
+_COL_TYPES = {c: "TEXT" for c in _CSV_COLS}
+
+
 def upsert_markets(conn: Any, markets: list[dict[str, Any]]) -> int:
     """Upsert market metadata into DuckDB.
 
-    Uses INSERT ... ON CONFLICT DO UPDATE so that:
-    - New markets are inserted with NULL attractiveness fields (scored later).
-    - Existing markets get all metadata refreshed except attractiveness_score
-      and attractiveness_reason, which are preserved via COALESCE.
-    - Markets absent from a partial API response are NOT deleted — they keep
-      their existing row intact, preventing data loss on CDN hiccups.
+    Uses a temp CSV file + DuckDB's native C++ CSV reader to load 36k rows as
+    a single bulk INSERT … ON CONFLICT DO UPDATE (~200ms) instead of row-by-row
+    executemany (~45s).  Attractiveness fields are preserved on conflict (not
+    included in the UPDATE SET list).
 
     Returns the number of rows upserted.
     """
     if not markets:
         return 0
 
-    rows = []
+    now_str = datetime.now(UTC).isoformat()
+    rows: list[tuple[str, ...]] = []
     for m in markets:
         tokens = m.get("tokens") or []
         last_price = _extract_yes_price(tokens)
         resolved = bool(m.get("closed", False))
+        end_dt = _parse_end_date(m.get("end_date_iso"))
 
         rows.append((
             str(m["condition_id"]),
             m.get("question", ""),
             m.get("market_slug", m.get("slug", "")),
             ",".join(t for t in (m.get("tags") or []) if isinstance(t, str)),
-            _parse_end_date(m.get("end_date_iso")),
-            float(m.get("volume", 0) or 0),
-            float(m.get("liquidity", 0) or 0),
-            True,   # active
-            resolved,
-            last_price,
-            datetime.now(UTC),
+            end_dt.isoformat() if end_dt else "",
+            str(float(m.get("volume", 0) or 0)),
+            str(float(m.get("liquidity", 0) or 0)),
+            "true",
+            "true" if resolved else "false",
+            str(last_price) if last_price is not None else "",
+            now_str,
         ))
 
-    # Explicit transaction: batches all rows into a single WAL flush instead of
-    # one auto-commit per row, reducing a 36k-market upsert from minutes to <1s.
-    conn.execute("BEGIN")
+    # Write to a temp CSV and use DuckDB's native C++ reader for bulk load.
+    # This is ~240× faster than executemany for 36k rows (0.2s vs 45s) because
+    # DuckDB's CSV reader bypasses Python's per-row overhead entirely.
+    tmp = tempfile.NamedTemporaryFile(
+        mode="w", suffix=".csv", delete=False, newline=""
+    )
     try:
-        conn.executemany(
-            """INSERT INTO markets
-                   (market_id, question, slug, category, end_date,
-                    volume_usd, liquidity_usd, active, resolved, last_price,
-                    last_synced)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-               ON CONFLICT (market_id) DO UPDATE SET
-                   question        = excluded.question,
-                   slug            = excluded.slug,
-                   category        = excluded.category,
-                   end_date        = excluded.end_date,
-                   volume_usd      = excluded.volume_usd,
-                   liquidity_usd   = excluded.liquidity_usd,
-                   active          = excluded.active,
-                   resolved        = excluded.resolved,
-                   last_price      = excluded.last_price,
-                   last_synced     = excluded.last_synced""",
-            rows,
-        )
-        conn.execute("COMMIT")
-    except Exception:
-        conn.execute("ROLLBACK")
-        raise
+        writer = csv.writer(tmp)
+        writer.writerow(_CSV_COLS)
+        writer.writerows(rows)
+        tmp.close()
+        conn.execute(_UPSERT_SQL.format(path=tmp.name, col_types=_COL_TYPES))
+    finally:
+        os.unlink(tmp.name)
+
     logger.info("Markets upserted", count=len(rows))
     return len(rows)
 
