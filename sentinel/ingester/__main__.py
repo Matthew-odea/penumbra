@@ -280,6 +280,8 @@ async def _periodic_status(
         if judge is not None:
             parts["judged"] = judge.signals_processed
             parts["alerts"] = judge.alerts_emitted
+            if judge.skipped_budget:
+                parts["judge_skipped"] = judge.skipped_budget
         logger.info("status", **parts)
 
 

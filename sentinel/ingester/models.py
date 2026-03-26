@@ -167,8 +167,11 @@ def parse_ws_trade(msg: dict) -> Trade | None:
                 ts = datetime.fromtimestamp(int(ts_raw) / 1000.0, tz=UTC)
             else:
                 ts = datetime.now(UTC)
+                ts_raw = int(ts.timestamp() * 1000)  # synthetic ms timestamp
             asset_id = str(msg.get("asset_id", ""))
-            trade_id = f"ws-{int(ts.timestamp())}-{asset_id[:8]}"
+            # Use full ms timestamp + 16-char asset prefix to avoid collisions
+            # within the same second on the same market (was 8-char/1s before)
+            trade_id = f"ws-{ts_raw}-{asset_id[:16]}"
             return Trade(
                 trade_id=trade_id,
                 market_id=str(msg["market"]),

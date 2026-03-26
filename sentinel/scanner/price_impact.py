@@ -56,9 +56,9 @@ SELECT
     ABS(tw.price - COALESCE(tw.prev_price, tw.price)) AS price_delta,
     m.liquidity_usd,
     CASE
-        WHEN m.liquidity_usd > 0
+        WHEN COALESCE(m.liquidity_usd, 0) > 0
         THEN ABS(tw.price - COALESCE(tw.prev_price, tw.price)) / m.liquidity_usd * tw.size_usd
-        ELSE 0
+        ELSE ABS(tw.price - COALESCE(tw.prev_price, tw.price)) / ? * tw.size_usd
     END AS impact_score
 FROM trade_window tw
 JOIN markets m ON tw.market_id = m.market_id
@@ -116,8 +116,12 @@ def get_price_impact(conn: Any, market_id: str, trade_id: str) -> PriceImpact | 
     """Compute the price impact for a specific trade.
 
     Returns ``None`` if the trade is not found or has no market metadata.
+    When ``liquidity_usd`` is 0 (Polymarket API returns null for most markets),
+    falls back to ``settings.price_impact_fallback_liquidity_usd`` so the
+    impact component is never permanently zeroed out.
     """
-    row = conn.execute(_IMPACT_FOR_TRADE_SQL, [market_id, trade_id]).fetchone()
+    fallback = settings.price_impact_fallback_liquidity_usd
+    row = conn.execute(_IMPACT_FOR_TRADE_SQL, [market_id, fallback, trade_id]).fetchone()
     return _row_to_impact(row) if row else None
 
 

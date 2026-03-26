@@ -66,6 +66,9 @@ class Settings(BaseSettings):
 
     # ── Scanner Thresholds ──────────────────────────────────────────────────
     zscore_threshold: float = 2.0
+    # Fallback market liquidity when Polymarket API returns null (stored as 0.0).
+    # Used as denominator in price impact formula so the component is never dead.
+    price_impact_fallback_liquidity_usd: float = 10_000.0
     min_trade_size_usd: float = 100.0
     signal_min_score: int = 30
     wallet_min_trades: int = 5

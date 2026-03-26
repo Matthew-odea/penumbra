@@ -123,6 +123,11 @@ class Scanner:
         if float(trade.size_usd) < settings.min_trade_size_usd:
             return
 
+        # WS Format 1 trades (last_trade_price) carry no wallet address.
+        # Flag this upfront so we can skip Alchemy and avoid awarding the
+        # "unknown new wallet" bonus — missing wallet ≠ new wallet.
+        _wallet_known = bool(trade.wallet)
+
         # 1. Volume Z-score (max of hourly and 5-min windows) + OFI
         z_score = 0.0
         ofi_score = 0.0
@@ -169,7 +174,8 @@ class Scanner:
         has_wallet_signal = is_whitelisted or (wallet_win_rate is not None and wallet_win_rate > 0.6)
         _large_threshold = settings.min_trade_size_usd * settings.new_wallet_large_trade_multiplier
         has_unknown_wallet = (
-            wallet_total_trades is None
+            _wallet_known  # "no wallet address" is not the same as "new wallet"
+            and wallet_total_trades is None
             and float(trade.size_usd) >= _large_threshold
         )
 
@@ -179,12 +185,13 @@ class Scanner:
         # 4. Funding anomaly (only for trades that pass at least one filter)
         funding_anomaly = False
         funding_age_minutes: int | None = None
-        try:
-            funding = await check_funding_anomaly(trade.wallet, trade.timestamp)
-            funding_anomaly = funding.is_anomaly
-            funding_age_minutes = funding.funding_age_minutes
-        except Exception as exc:
-            logger.debug("Funding check failed", wallet=trade.wallet[:10], error=str(exc))
+        if _wallet_known:
+            try:
+                funding = await check_funding_anomaly(trade.wallet, trade.timestamp)
+                funding_anomaly = funding.is_anomaly
+                funding_age_minutes = funding.funding_age_minutes
+            except Exception as exc:
+                logger.debug("Funding check failed", wallet=trade.wallet[:10], error=str(exc))
 
         # 5. Market concentration (wallet focus on this market)
         market_concentration = 0.0
