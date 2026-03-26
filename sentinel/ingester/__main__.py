@@ -45,7 +45,7 @@ logger = structlog.get_logger()
 
 # ── Market attractiveness scoring ─────────────────────────────────────────────
 
-_SCORING_CONCURRENCY = 8  # Parallel Nova Lite workers
+_SCORING_CONCURRENCY = 3  # Parallel Nova Lite workers (reduced from 8: was OOM-killing t3.micro)
 
 
 async def _market_attractiveness_scorer(
