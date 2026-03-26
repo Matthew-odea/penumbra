@@ -18,6 +18,7 @@ import argparse
 import asyncio
 import json
 import time
+from datetime import UTC, datetime, timedelta
 
 import structlog
 
@@ -100,7 +101,6 @@ async def _market_attractiveness_scorer(
                         except asyncio.QueueEmpty:
                             break
                     # Sleep until midnight UTC (budget reset)
-                    from datetime import timedelta
                     _now = datetime.now(UTC)
                     _reset = (_now.replace(
                         hour=0, minute=0, second=0, microsecond=0,

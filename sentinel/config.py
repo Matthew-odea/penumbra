@@ -93,7 +93,7 @@ class Settings(BaseSettings):
     # ── Market Intelligence ──────────────────────────────────────────────────
     hot_market_count: int = 50                  # Size of hot polling tier
     hot_market_min_score: int = 60              # Attractiveness threshold for hot tier
-    hot_market_min_liquidity: float = 5000.0    # Hard floor to exclude micro-markets
+    hot_market_min_liquidity: float = 0.0       # 0: Polymarket API returns liquidity=None→0.0; priority formula deprioritises illiquid markets naturally
     hot_market_refresh_interval_seconds: int = 1800  # 30 min
 
     # ── Ingester ────────────────────────────────────────────────────────────
