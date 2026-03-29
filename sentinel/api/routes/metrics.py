@@ -509,3 +509,16 @@ async def patterns() -> list[dict]:
         }
         for h in range(24)
     ]
+
+
+@router.post("/admin/rescore")
+async def rescore_signals(dry_run: bool = Query(False)) -> dict:
+    """Re-run compute_statistical_score on all existing signals.
+
+    Uses the in-process DuckDB connection so there's no lock conflict
+    with the running pipeline. Pass ``?dry_run=true`` to preview.
+    """
+    from scripts.rescore_signals import rescore
+
+    db = get_db()
+    return rescore(conn=db, dry_run=dry_run)

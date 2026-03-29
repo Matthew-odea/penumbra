@@ -51,10 +51,17 @@ WHERE signal_id = ?
 """
 
 
-def rescore(db_path: Path | None = None, *, dry_run: bool = False) -> dict:
-    """Rescore all signals and return a summary dict."""
-    conn = init_schema(db_path)
-    rows = conn.execute(_FETCH_SQL).fetchall()
+def rescore(db_path: Path | None = None, *, dry_run: bool = False, conn: object | None = None) -> dict:
+    """Rescore all signals and return a summary dict.
+
+    Args:
+        db_path: Path to DuckDB file (ignored if conn is provided).
+        dry_run: Show changes without writing.
+        conn: Optional existing DuckDB connection (for in-process use via API).
+    """
+    if conn is None:
+        conn = init_schema(db_path)
+    rows = conn.execute(_FETCH_SQL).fetchall()  # type: ignore[union-attr]
     logger.info("Fetched signals for rescoring", count=len(rows))
 
     updates: list[tuple[int, int, str]] = []
@@ -117,10 +124,12 @@ def rescore(db_path: Path | None = None, *, dry_run: bool = False) -> dict:
     if dry_run:
         logger.info("DRY RUN — no changes written")
     else:
-        conn.executemany(_UPDATE_SQL, updates)
+        conn.executemany(_UPDATE_SQL, updates)  # type: ignore[union-attr]
         logger.info("Scores updated in DB", count=len(updates))
 
-    conn.close()
+    # Only close the connection if we opened it (not passed in via API)
+    if db_path is not None or conn is None:
+        pass  # conn was opened by init_schema — caller manages lifetime
     return summary
 
 
