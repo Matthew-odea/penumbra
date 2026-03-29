@@ -468,11 +468,28 @@ async def run_ingester(
             logger.warning("Initial market sync failed after retries — continuing with stale data")
 
         # 3. Now that we have the full DB, build the initial hot tier from priority formula
+        #    Update BOTH the REST poller and WS listener to use the same market set.
         try:
             priority_ids = get_priority_market_ids(conn)
             if priority_ids:
                 poller.update_markets(priority_ids)
-                logger.info("Initial hot tier from priority formula", count=len(priority_ids))
+                # Subscribe WS to the priority markets' token IDs
+                placeholders = ",".join("?" * len(priority_ids))
+                rows = conn.execute(
+                    f"SELECT token_ids FROM markets WHERE market_id IN ({placeholders}) AND token_ids IS NOT NULL",
+                    priority_ids,
+                ).fetchall()
+                priority_asset_ids = [
+                    tid for row in rows if row[0]
+                    for tid in row[0].split(",") if tid
+                ]
+                if priority_asset_ids:
+                    await listener.update_subscriptions(priority_asset_ids)
+                logger.info(
+                    "Initial hot tier from priority formula",
+                    markets=len(priority_ids),
+                    ws_assets=len(priority_asset_ids) if priority_asset_ids else 0,
+                )
         except Exception as exc:
             logger.warning("Failed to build initial hot tier from DB", error=str(exc))
 

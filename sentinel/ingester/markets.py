@@ -82,10 +82,10 @@ async def fetch_all_markets(
     *,
     base_url: str | None = None,
 ) -> list[dict[str, Any]]:
-    """Page through ``/markets`` and return ALL active markets.
+    """Page through ``/markets`` and return all non-archived markets.
 
-    No category filter — all active, non-closed, non-archived markets are
-    returned.  The LLM attractiveness scorer decides which are worth watching.
+    Includes both active and closed (resolved) markets so that resolution
+    outcomes are synced into the DB for accuracy measurement.
 
     Args:
         base_url: Override for the REST URL (tests / dry-run).
@@ -109,7 +109,7 @@ async def fetch_all_markets(
             page += 1
 
             for m in body.get("data", []):
-                if not m.get("active") or m.get("closed") or m.get("archived"):
+                if m.get("archived"):
                     continue
                 markets.append(m)
 
@@ -143,37 +143,75 @@ def _extract_yes_price(tokens: list[dict[str, Any]]) -> float | None:
     return None
 
 
+def _extract_resolved_price(tokens: list[dict[str, Any]]) -> float | None:
+    """Extract the resolution price from a closed market's tokens.
+
+    For binary markets the YES token's ``winner`` field is the ground truth.
+    Returns 1.0 (YES won), 0.0 (NO won), or None if unresolved / ambiguous.
+
+    The API returns ``"price": 1`` on the winning token, but ``winner`` is
+    more reliable because ``price`` can reflect pre-resolution trading.
+    """
+    for token in tokens:
+        if not isinstance(token, dict):
+            continue
+        outcome = str(token.get("outcome", "")).lower()
+        if outcome != "yes":
+            continue
+        # Prefer the 'winner' flag (explicit boolean from Polymarket)
+        winner = token.get("winner")
+        if winner is True:
+            return 1.0
+        if winner is False:
+            return 0.0
+        # Fallback: on resolved markets the price snaps to 0 or 1
+        price = token.get("price")
+        if price is not None:
+            try:
+                p = float(price)
+                if p >= 0.95:
+                    return 1.0
+                if p <= 0.05:
+                    return 0.0
+            except (TypeError, ValueError):
+                pass
+    return None
+
+
 _CSV_COLS = [
     "market_id", "question", "slug", "category", "end_date",
-    "volume_usd", "liquidity_usd", "active", "resolved", "last_price",
-    "last_synced", "token_ids",
+    "volume_usd", "liquidity_usd", "active", "resolved", "resolved_price",
+    "last_price", "last_synced", "token_ids",
 ]
 
 _UPSERT_SQL = """
 INSERT INTO markets
     (market_id, question, slug, category, end_date,
-     volume_usd, liquidity_usd, active, resolved, last_price, last_synced, token_ids)
+     volume_usd, liquidity_usd, active, resolved, resolved_price,
+     last_price, last_synced, token_ids)
 SELECT
     market_id, question, slug, category,
     NULLIF(end_date, '')::TIMESTAMPTZ,
     volume_usd::DOUBLE, liquidity_usd::DOUBLE,
     active::BOOLEAN, resolved::BOOLEAN,
+    NULLIF(resolved_price, '')::DOUBLE,
     NULLIF(last_price, '')::DOUBLE,
     NULLIF(last_synced, '')::TIMESTAMPTZ,
     NULLIF(token_ids, '')
 FROM read_csv({path!r}, columns={col_types!r}, header=true, quote='"', escape='"')
 ON CONFLICT (market_id) DO UPDATE SET
-    question      = excluded.question,
-    slug          = excluded.slug,
-    category      = excluded.category,
-    end_date      = excluded.end_date,
-    volume_usd    = excluded.volume_usd,
-    liquidity_usd = excluded.liquidity_usd,
-    active        = excluded.active,
-    resolved      = excluded.resolved,
-    last_price    = excluded.last_price,
-    last_synced   = excluded.last_synced,
-    token_ids     = excluded.token_ids
+    question       = excluded.question,
+    slug           = excluded.slug,
+    category       = excluded.category,
+    end_date       = excluded.end_date,
+    volume_usd     = excluded.volume_usd,
+    liquidity_usd  = excluded.liquidity_usd,
+    active         = excluded.active,
+    resolved       = excluded.resolved,
+    resolved_price = COALESCE(excluded.resolved_price, markets.resolved_price),
+    last_price     = excluded.last_price,
+    last_synced    = excluded.last_synced,
+    token_ids      = excluded.token_ids
 """
 
 # DuckDB column-type hints for the CSV reader (all TEXT so we control casts above)
@@ -200,6 +238,8 @@ def upsert_markets(conn: Any, markets: list[dict[str, Any]]) -> tuple[int, set[s
         tokens = m.get("tokens") or []
         last_price = _extract_yes_price(tokens)
         resolved = bool(m.get("closed", False))
+        resolved_price = _extract_resolved_price(tokens) if resolved else None
+        active = not resolved and not m.get("archived", False)
         end_dt = _parse_end_date(m.get("end_date_iso"))
 
         condition_id = str(m["condition_id"])
@@ -217,8 +257,9 @@ def upsert_markets(conn: Any, markets: list[dict[str, Any]]) -> tuple[int, set[s
             end_dt.isoformat() if end_dt else "",
             str(float(m.get("volume", 0) or 0)),
             str(float(m.get("liquidity", 0) or 0)),
-            "true",
+            "true" if active else "false",
             "true" if resolved else "false",
+            str(resolved_price) if resolved_price is not None else "",
             str(last_price) if last_price is not None else "",
             now_str,
             token_ids_str,
