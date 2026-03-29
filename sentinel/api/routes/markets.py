@@ -33,15 +33,16 @@ def _tier(
     """Compute display tier: hot / scored / unscored."""
     if attractiveness_score is None:
         return "unscored"
+    if end_date is not None and end_date.tzinfo is None:
+        end_date = end_date.replace(tzinfo=UTC)
+    now = datetime.now(UTC)
     if (
         active
         and not resolved
-        and (attractiveness_score >= settings.hot_market_min_score)
+        and attractiveness_score >= settings.hot_market_min_score
         and (liquidity_usd or 0) >= settings.hot_market_min_liquidity
         and end_date is not None
-        and end_date.replace(tzinfo=UTC) > datetime.now(UTC)
-        if end_date and end_date.tzinfo is None
-        else end_date is not None and end_date > datetime.now(UTC)
+        and end_date > now
     ):
         return "hot"
     return "scored"
@@ -52,7 +53,7 @@ async def list_markets(
     limit: int = Query(200, ge=1, le=2000),
     active_only: bool = Query(True),
     tier: str | None = Query(None, description="hot | scored | unscored"),
-    min_score: int | None = Query(None, ge=0, le=100),
+    min_score: int | None = Query(None, ge=0),
     sort: str = Query("signals", description="signals | priority | liquidity | resolution"),
 ) -> list[dict]:
     """List tracked markets with attractiveness scores and tier information."""

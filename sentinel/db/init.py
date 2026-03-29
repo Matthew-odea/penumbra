@@ -34,7 +34,8 @@ CREATE TABLE IF NOT EXISTS markets (
     last_synced          TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     last_price           DECIMAL(10, 6),        -- YES token current price (0-1 probability)
     attractiveness_score INTEGER,               -- LLM score 0-100, NULL until scored
-    attractiveness_reason VARCHAR               -- One-sentence explanation from LLM
+    attractiveness_reason VARCHAR,              -- One-sentence explanation from LLM
+    token_ids            VARCHAR                -- Comma-joined YES/NO token_ids for WS subscription
 );
 
 CREATE TABLE IF NOT EXISTS trades (
@@ -254,6 +255,7 @@ SELECT
     SUM(size_usd) AS collective_volume_usd
 FROM trades
 WHERE timestamp >= CURRENT_TIMESTAMP - INTERVAL '10 minutes'
+  AND wallet != ''
 GROUP BY 1, 2, 3
 HAVING COUNT(DISTINCT wallet) >= 3;
 
@@ -292,6 +294,7 @@ SELECT
 FROM trades t
 JOIN markets m ON t.market_id = m.market_id
 WHERE m.resolved = TRUE
+  AND t.wallet != ''
 GROUP BY t.wallet
 HAVING COUNT(*) >= 5;
 """
@@ -383,6 +386,11 @@ def init_schema(db_path: Path | None = None) -> duckdb.DuckDBPyConnection:
     if "attractiveness_reason" not in mkt_cols:
         conn.execute("ALTER TABLE markets ADD COLUMN attractiveness_reason VARCHAR")
         logger.info("Migration: added 'attractiveness_reason' column to markets table")
+
+    # v010: token_ids for WS subscription refresh
+    if "token_ids" not in mkt_cols:
+        conn.execute("ALTER TABLE markets ADD COLUMN token_ids VARCHAR")
+        logger.info("Migration: added 'token_ids' column to markets table")
 
     # Force WAL checkpoint so all schema changes are flushed to the .duckdb
     # file before this function returns.  Without this, if the process is

@@ -446,7 +446,7 @@ class TestViewRegression:
         """Insert trades and markets for view testing."""
         now = datetime.now(tz=UTC)
         conn.execute(
-            "INSERT INTO markets VALUES (?, ?, ?, ?, ?, ?, ?, TRUE, TRUE, 1.0, ?, NULL, NULL, NULL)",
+            "INSERT INTO markets VALUES (?, ?, ?, ?, ?, ?, ?, TRUE, TRUE, 1.0, ?, NULL, NULL, NULL, NULL)",
             ["mkt-v1", "View test market?", "view-test", "Crypto",
              now + timedelta(days=30), 1000000.0, 50000.0, now],
         )
@@ -480,7 +480,7 @@ class TestViewRegression:
         conn = _fresh_db()
         now = datetime.now(tz=UTC)
         conn.execute(
-            "INSERT INTO markets VALUES (?, ?, ?, ?, ?, ?, ?, TRUE, TRUE, 1.0, ?, NULL, NULL, NULL)",
+            "INSERT INTO markets VALUES (?, ?, ?, ?, ?, ?, ?, TRUE, TRUE, 1.0, ?, NULL, NULL, NULL, NULL)",
             ["mkt-few", "Few?", "few", "Science",
              now + timedelta(days=30), 100000.0, 10000.0, now],
         )

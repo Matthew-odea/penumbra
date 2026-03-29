@@ -183,38 +183,6 @@ class TestScannerPipeline:
         assert scanner.signals_emitted == 0
 
     @pytest.mark.asyncio
-    async def test_scanner_counts_book_events(self):
-        """BookEvents should be counted but not generate signals."""
-        conn = _init_db()
-        scanner_queue: asyncio.Queue = asyncio.Queue()
-        scanner = Scanner(conn, scanner_queue=scanner_queue)
-
-        book_event = BookEvent(
-            event_id="evt-1",
-            market_id="mkt-1",
-            asset_id="asset-1",
-            side="BUY",
-            price=Decimal("0.5"),
-            size=Decimal("1000"),
-            best_bid=Decimal("0.49"),
-            best_ask=Decimal("0.51"),
-            timestamp=datetime.now(tz=UTC),
-        )
-        await scanner_queue.put([book_event])
-
-        task = asyncio.create_task(scanner.run())
-        await asyncio.sleep(0.1)
-        scanner.stop()
-        task.cancel()
-        try:
-            await task
-        except asyncio.CancelledError:
-            pass
-
-        assert scanner.book_events_scanned == 1
-        assert scanner.signals_emitted == 0
-
-    @pytest.mark.asyncio
     async def test_scanner_emits_signal_for_anomaly(self):
         """A large trade in a market with a volume spike should emit a signal."""
         conn = _init_db()

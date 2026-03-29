@@ -41,6 +41,7 @@ class Settings(BaseSettings):
     aws_region: str = "us-east-1"
     bedrock_tier1_model: str = "amazon.nova-lite-v1:0"
     bedrock_tier1_daily_limit: int = 5000
+    bedrock_market_scoring_daily_limit: int = 4000  # Separate pool for attractiveness scoring
     bedrock_tier2_model: str = "amazon.nova-pro-v1:0"
     bedrock_tier2_daily_limit: int = 0  # Disabled for high-throughput mode
     bedrock_tier2_min_suspicion: int = 60

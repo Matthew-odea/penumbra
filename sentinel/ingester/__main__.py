@@ -80,8 +80,8 @@ async def _market_attractiveness_scorer(
                 if row[4] is not None:
                     continue
 
-                # Gate on Bedrock budget — market scoring shares the tier1 pool
-                if not budget.try_record_call("tier1"):
+                # Gate on Bedrock budget — market scoring uses its own pool
+                if not budget.try_record_call("market_scoring"):
                     # Budget exhausted for today.  Drain the rest of the queue
                     # without any DuckDB reads (avoids blocking the event loop
                     # for 30k synchronous SELECT calls), then sleep until the
@@ -192,7 +192,7 @@ async def _on_demand_market_resolver(
         try:
             raw = await fetch_market_by_id(market_id)
             if raw:
-                upsert_markets(conn, [raw])  # type: ignore[arg-type]
+                _, _ = upsert_markets(conn, [raw])  # type: ignore[arg-type]
                 # Queue newly discovered market for LLM scoring
                 scoring_queue.put_nowait(market_id)
                 logger.info("On-demand market metadata fetched", market_id=market_id)
@@ -224,12 +224,14 @@ async def _periodic_market_sync(
 async def _periodic_hot_market_refresh(
     conn: object,
     poller: TradePoller,
+    listener: Listener,
     interval_seconds: int | None = None,
 ) -> None:
     """Refresh the hot-tier market list from the DB priority formula.
 
     Replaces the old /sampling-markets API call with a local DB query
     using the attractiveness × time_weight × uncertainty × liquidity formula.
+    Also updates the WS subscription for any newly-prioritised markets.
     """
     interval = interval_seconds or settings.hot_market_refresh_interval_seconds
     while True:
@@ -238,6 +240,23 @@ async def _periodic_hot_market_refresh(
             new_ids = get_priority_market_ids(conn)  # type: ignore[arg-type]
             poller.update_markets(new_ids)
             logger.info("Hot market list refreshed from priority formula", count=len(new_ids))
+
+            # Update WS subscription for new hot-tier markets
+            if new_ids:
+                placeholders = ",".join("?" * len(new_ids))
+                rows = conn.execute(  # type: ignore[attr-defined]
+                    f"SELECT token_ids FROM markets WHERE market_id IN ({placeholders}) AND token_ids IS NOT NULL",
+                    new_ids,
+                ).fetchall()
+                new_asset_ids = [
+                    tid
+                    for row in rows
+                    if row[0]
+                    for tid in row[0].split(",")
+                    if tid
+                ]
+                if new_asset_ids:
+                    await listener.update_subscriptions(new_asset_ids)
         except Exception as exc:
             logger.warning("Hot market refresh failed", error=str(exc))
 
@@ -331,17 +350,12 @@ async def run_ingester(
                     await _unknown_market_queue.put(trade.market_id)
         await writer.add(trade)
 
-    book_event_count = 0
     _last_snapshot: dict[str, float] = {}
     _SNAPSHOT_INTERVAL = 30.0
 
     async def _on_book_event(evt: BookEvent) -> None:
-        nonlocal book_event_count
-        book_event_count += 1
         if dry_run:
             print(json.dumps(evt.as_dict()))
-        if scanner_queue is not None:
-            await scanner_queue.put([evt])
 
         if not dry_run and conn is not None:
             now = time.monotonic()
@@ -446,7 +460,7 @@ async def run_ingester(
         # 7. Periodic hot-market refresh from DB priority formula (every 30 min)
         tasks.append(
             asyncio.create_task(
-                _periodic_hot_market_refresh(conn, poller),
+                _periodic_hot_market_refresh(conn, poller, listener),
                 name="hot_market_refresh",
             )
         )

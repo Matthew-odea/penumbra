@@ -54,7 +54,7 @@ class TestUpsertMarkets:
 
     def test_basic_upsert(self, db_conn):
         markets = [self._make_market()]
-        count = upsert_markets(db_conn, markets)
+        count, _ = upsert_markets(db_conn, markets)
         assert count == 1
         row = db_conn.execute("SELECT market_id, question FROM markets").fetchone()
         assert row[0] == "0xabc"
@@ -76,11 +76,13 @@ class TestUpsertMarkets:
             self._make_market(condition_id="0x2"),
             self._make_market(condition_id="0x3"),
         ]
-        count = upsert_markets(db_conn, markets)
+        count, _ = upsert_markets(db_conn, markets)
         assert count == 3
 
     def test_empty_list(self, db_conn):
-        assert upsert_markets(db_conn, []) == 0
+        count, ids = upsert_markets(db_conn, [])
+        assert count == 0
+        assert ids == set()
 
     def test_tags_stored_as_category(self, db_conn):
         m = self._make_market(tags=["Politics", "USA"])

@@ -20,6 +20,7 @@ logger = structlog.get_logger()
 _TIER_LIMITS: dict[str, int] = {
     "tier1": settings.bedrock_tier1_daily_limit,
     "tier2": settings.bedrock_tier2_daily_limit,
+    "market_scoring": settings.bedrock_market_scoring_daily_limit,
 }
 
 

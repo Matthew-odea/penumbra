@@ -24,7 +24,7 @@ from typing import Any
 import structlog
 
 from sentinel.config import settings
-from sentinel.ingester.models import BookEvent, IngesterEvent, Trade
+from sentinel.ingester.models import IngesterEvent, Trade
 from sentinel.scanner.funding import check_funding_anomaly
 from sentinel.scanner.price_impact import get_price_impact
 from sentinel.scanner.scorer import Signal, build_signal, write_signal
@@ -68,7 +68,6 @@ class Scanner:
 
         # Counters
         self._trades_scanned = 0
-        self._book_events_scanned = 0
         self._signals_emitted = 0
 
     # ── Public API ──────────────────────────────────────────────────────
@@ -90,11 +89,6 @@ class Scanner:
                 for event in batch:
                     if isinstance(event, Trade):
                         await self._process_trade(event)
-                    elif isinstance(event, BookEvent):
-                        self._book_events_scanned += 1
-                        # BookEvents feed into volume stats via DuckDB but
-                        # don't generate signals directly — they're order book
-                        # changes, not trade executions.
             finally:
                 self._scanner_queue.task_done()
 
@@ -104,10 +98,6 @@ class Scanner:
     @property
     def trades_scanned(self) -> int:
         return self._trades_scanned
-
-    @property
-    def book_events_scanned(self) -> int:
-        return self._book_events_scanned
 
     @property
     def signals_emitted(self) -> int:

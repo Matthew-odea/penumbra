@@ -70,12 +70,14 @@ class Listener:
     ) -> None:
         self._on_trade = on_trade
         self._on_book_event = on_book_event
-        self._asset_ids = asset_ids or []
+        self._asset_ids = list(asset_ids or [])
         self._ws_url = ws_url or settings.polymarket_ws_url
         self._dry_run = dry_run
         self._trade_count = 0
         self._book_event_count = 0
+        self._book_message_count = 0
         self._running = False
+        self._ws: ClientConnection | None = None  # active connection, None between reconnects
 
     # ── public API ──────────────────────────────────────────────────────
 
@@ -117,7 +119,47 @@ class Listener:
 
     @property
     def book_event_count(self) -> int:
+        """Individual price-change entries received (multiple per WS message)."""
         return self._book_event_count
+
+    @property
+    def book_message_count(self) -> int:
+        """WS messages containing price_changes (one message may have many entries)."""
+        return self._book_message_count
+
+    async def update_subscriptions(self, new_asset_ids: list[str]) -> None:
+        """Subscribe to additional asset_ids on the live WS connection.
+
+        Deduplicates against already-subscribed IDs.  When called between
+        reconnects (``_ws`` is None), the new IDs are queued so the next
+        ``_subscribe()`` call includes them automatically.
+        """
+        novel = [aid for aid in new_asset_ids if aid not in self._asset_ids]
+        if not novel:
+            return
+        self._asset_ids.extend(novel)
+        if self._ws is not None:
+            payload = {
+                "auth": {},
+                "type": "subscribe",
+                "markets": [],
+                "assets_ids": novel,
+            }
+            try:
+                await self._ws.send(json.dumps(payload))
+                logger.info(
+                    "WS subscription updated",
+                    new_assets=len(novel),
+                    total_assets=len(self._asset_ids),
+                )
+            except Exception as exc:
+                logger.warning("WS subscription update failed", error=str(exc))
+        else:
+            logger.debug(
+                "WS not connected — new asset_ids queued for next connect",
+                queued=len(novel),
+                total_assets=len(self._asset_ids),
+            )
 
     # ── internals ───────────────────────────────────────────────────────
 
@@ -134,16 +176,20 @@ class Listener:
             ping_timeout=20,
             close_timeout=10,
         ) as ws:
-            await self._subscribe(ws)
-            logger.info(
-                "WS connected and subscribed",
-                assets=len(self._asset_ids) or "none",
-            )
+            self._ws = ws
+            try:
+                await self._subscribe(ws)
+                logger.info(
+                    "WS connected and subscribed",
+                    assets=len(self._asset_ids) or "none",
+                )
 
-            async for raw in ws:
-                if not self._running:
-                    break
-                await self._handle_message(raw)
+                async for raw in ws:
+                    if not self._running:
+                        break
+                    await self._handle_message(raw)
+            finally:
+                self._ws = None
 
     async def _subscribe(self, ws: ClientConnection) -> None:
         """Send subscription message for the configured asset IDs.
@@ -159,9 +205,9 @@ class Listener:
             "assets_ids": self._asset_ids,
         }
         await ws.send(json.dumps(payload))
-        logger.debug(
-            "Subscription sent",
-            num_assets=len(self._asset_ids),
+        logger.info(
+            "WS subscription sent",
+            asset_count=len(self._asset_ids),
         )
 
     async def _handle_message(self, raw: str | bytes) -> None:
@@ -196,6 +242,7 @@ class Listener:
 
         # ── 2. Price changes (order book updates) ────────────────────
         if "price_changes" in msg:
+            self._book_message_count += 1
             events = parse_price_changes(msg)
             for evt in events:
                 self._book_event_count += 1

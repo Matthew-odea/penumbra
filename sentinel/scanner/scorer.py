@@ -1,8 +1,12 @@
 """Composite signal scorer.
 
 Combines volume anomaly, price impact, wallet reputation, and funding
-anomaly metrics into a single 0-100 "statistical score" that determines
+anomaly metrics into a composite "statistical score" that determines
 whether a trade is forwarded to the Judge.
+
+Base components sum to at most 100 points; multipliers (urgency, liquidity
+cliff, coordination) can push the score above 100. The uncapped score
+preserves relative ranking for the Judge.
 
 Weight distribution (configurable):
   - Volume anomaly (Z-score):  0-40 points
@@ -234,7 +238,7 @@ def compute_statistical_score(
         coord_mult = 1.15 if z_score > threshold else 1.3
         score = int(score * coord_mult)
 
-    return min(100, score)
+    return score
 
 
 # ── Signal construction ─────────────────────────────────────────────────────

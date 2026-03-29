@@ -146,20 +146,21 @@ def _extract_yes_price(tokens: list[dict[str, Any]]) -> float | None:
 _CSV_COLS = [
     "market_id", "question", "slug", "category", "end_date",
     "volume_usd", "liquidity_usd", "active", "resolved", "last_price",
-    "last_synced",
+    "last_synced", "token_ids",
 ]
 
 _UPSERT_SQL = """
 INSERT INTO markets
     (market_id, question, slug, category, end_date,
-     volume_usd, liquidity_usd, active, resolved, last_price, last_synced)
+     volume_usd, liquidity_usd, active, resolved, last_price, last_synced, token_ids)
 SELECT
     market_id, question, slug, category,
     NULLIF(end_date, '')::TIMESTAMPTZ,
     volume_usd::DOUBLE, liquidity_usd::DOUBLE,
     active::BOOLEAN, resolved::BOOLEAN,
     NULLIF(last_price, '')::DOUBLE,
-    NULLIF(last_synced, '')::TIMESTAMPTZ
+    NULLIF(last_synced, '')::TIMESTAMPTZ,
+    NULLIF(token_ids, '')
 FROM read_csv({path!r}, columns={col_types!r}, header=true, quote='"', escape='"')
 ON CONFLICT (market_id) DO UPDATE SET
     question      = excluded.question,
@@ -171,14 +172,15 @@ ON CONFLICT (market_id) DO UPDATE SET
     active        = excluded.active,
     resolved      = excluded.resolved,
     last_price    = excluded.last_price,
-    last_synced   = excluded.last_synced
+    last_synced   = excluded.last_synced,
+    token_ids     = excluded.token_ids
 """
 
 # DuckDB column-type hints for the CSV reader (all TEXT so we control casts above)
 _COL_TYPES = {c: "TEXT" for c in _CSV_COLS}
 
 
-def upsert_markets(conn: Any, markets: list[dict[str, Any]]) -> int:
+def upsert_markets(conn: Any, markets: list[dict[str, Any]]) -> tuple[int, set[str]]:
     """Upsert market metadata into DuckDB.
 
     Uses a temp CSV file + DuckDB's native C++ CSV reader to load 36k rows as
@@ -186,21 +188,29 @@ def upsert_markets(conn: Any, markets: list[dict[str, Any]]) -> int:
     executemany (~45s).  Attractiveness fields are preserved on conflict (not
     included in the UPDATE SET list).
 
-    Returns the number of rows upserted.
+    Returns (rows_upserted, set_of_upserted_condition_ids).
     """
     if not markets:
-        return 0
+        return 0, set()
 
     now_str = datetime.now(UTC).isoformat()
     rows: list[tuple[str, ...]] = []
+    synced_ids: set[str] = set()
     for m in markets:
         tokens = m.get("tokens") or []
         last_price = _extract_yes_price(tokens)
         resolved = bool(m.get("closed", False))
         end_dt = _parse_end_date(m.get("end_date_iso"))
 
+        condition_id = str(m["condition_id"])
+        synced_ids.add(condition_id)
+        token_ids_str = ",".join(
+            str(t.get("token_id", ""))
+            for t in tokens
+            if t.get("token_id")
+        )
         rows.append((
-            str(m["condition_id"]),
+            condition_id,
             m.get("question", ""),
             m.get("market_slug", m.get("slug", "")),
             ",".join(t for t in (m.get("tags") or []) if isinstance(t, str)),
@@ -211,6 +221,7 @@ def upsert_markets(conn: Any, markets: list[dict[str, Any]]) -> int:
             "true" if resolved else "false",
             str(last_price) if last_price is not None else "",
             now_str,
+            token_ids_str,
         ))
 
     # Write to a temp CSV and use DuckDB's native C++ reader for bulk load.
@@ -229,7 +240,7 @@ def upsert_markets(conn: Any, markets: list[dict[str, Any]]) -> int:
         os.unlink(tmp.name)
 
     logger.info("Markets upserted", count=len(rows))
-    return len(rows)
+    return len(rows), synced_ids
 
 
 async def fetch_market_by_id(
@@ -259,10 +270,32 @@ async def fetch_market_by_id(
 async def sync_markets(conn: Any, *, base_url: str | None = None) -> int:
     """Full sync: fetch all markets from API → upsert into DuckDB.
 
+    After upserting, marks any previously-active market that was not returned
+    by the API as inactive (closed, delisted, or resolved early).  Only runs
+    the deactivation pass when at least 50 markets were synced — this guards
+    against a partial API response silently deactivating the entire DB.
+
     Returns the number of markets upserted.
     """
     markets = await fetch_all_markets(base_url=base_url)
-    return upsert_markets(conn, markets)
+    count, synced_ids = upsert_markets(conn, markets)
+
+    if len(synced_ids) > 50:
+        synced_list = list(synced_ids)
+        placeholders = ",".join("?" * len(synced_list))
+        deactivated = conn.execute(
+            f"""
+            UPDATE markets
+            SET active = false
+            WHERE active = true
+              AND market_id NOT IN ({placeholders})
+            """,
+            synced_list,
+        ).rowcount
+        if deactivated:
+            logger.info("Deactivated unlisted markets", count=deactivated)
+
+    return count
 
 
 def get_priority_market_ids(
