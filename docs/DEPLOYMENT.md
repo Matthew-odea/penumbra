@@ -171,7 +171,7 @@ The new instance will re-attach the data volume and pull the latest image from E
 :8000 ────────┼─▶│  FastAPI + Dashboard│  │
               │  │  Ingester           │  │
               │  │  Scanner            │  │
-              │  │  Judge (4 workers)  │  │
+              │  │  Judge (8 workers)  │  │
               │  └────────┬────────────┘  │
               │           │               │
               │    /dev/xvdf (EBS 20 GB)  │

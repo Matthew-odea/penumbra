@@ -26,7 +26,7 @@ Where:
 - $\text{MAD} = \text{median}(|x_i - \tilde{x}|)$
 - $0.6745$ = scale factor for consistency with normal distribution
 
-**Threshold: $M_i > 3.5$** (equivalent to ~3σ for normal data, but robust to outliers).
+**Threshold: configurable via `ZSCORE_THRESHOLD`** (default: 2.0; originally 3.5). Lower values capture more signals at the cost of more false positives. The threshold applies to both hourly (`v_volume_anomalies`) and 5-minute (`v_volume_anomalies_5m`) windows.
 
 ## Implementation
 

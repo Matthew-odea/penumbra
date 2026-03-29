@@ -47,17 +47,26 @@ Implement a **high-throughput parallel LLM pipeline with Nova Lite-only mode**:
 - Per-market caching prevents redundant searches
 - Low-scoring signals get LLM analysis without news context
 
+### Market Attractiveness Scoring (Separate Budget)
+- Uses Nova Lite to score each market's insider-trading potential (0-100)
+- **Budget**: 4,000 calls/day — independent pool from the Judge's tier1
+- Runs on first sync (~3,900 markets) and for newly discovered markets
+- 3 parallel workers (reduced from 8 to fit t3.micro memory)
+- Scores are stored in `markets.attractiveness_score` and never recomputed
+
 ### Budget Tracking
 - Stored in DuckDB: `llm_budget` table with `date`, `tier`, `calls_used`, `calls_limit`
-- Thread-safe counters across worker pool
-- Checked before every Bedrock invocation
+- Three independent budget pools: `tier1` (judge), `tier2` (judge deep), `market_scoring`
+- Atomic check-and-increment: `UPDATE ... WHERE calls_used < calls_limit RETURNING`
+- Thread-safe across worker pool via DuckDB's single-writer guarantee
 - Exposed on the dashboard as a "Budget Remaining" indicator
 
 ## Consequences
 
 ### Cost Impact
-- **Nova Lite only**: 5,000 × $0.0001 = **$0.50/day** (~$15/month)
-- **With Nova Pro** (30 calls): +$0.03/day
+- **Judge (Nova Lite)**: 5,000 x $0.0001 = **$0.50/day**
+- **Market scoring (Nova Lite)**: 4,000 x $0.0001 = **$0.40/day** (mostly first-boot)
+- **Total**: ~$0.90/day (~$27/month) at full utilisation
 - **No surprise bills**: Hard caps prevent runaway costs
 
 ### Throughput
@@ -76,6 +85,7 @@ All values configurable in `.env`:
 ```
 BEDROCK_TIER1_MODEL=amazon.nova-lite-v1:0
 BEDROCK_TIER1_DAILY_LIMIT=5000
+BEDROCK_MARKET_SCORING_DAILY_LIMIT=4000
 BEDROCK_TIER2_MODEL=amazon.nova-pro-v1:0
 BEDROCK_TIER2_DAILY_LIMIT=0
 BEDROCK_TIER2_MIN_SUSPICION=60

@@ -11,7 +11,7 @@ pip install -e ".[dev]"
 python -m sentinel.db.init      # Initialize DuckDB schema
 
 # Run
-make run                        # Full pipeline (Ingester → Scanner → Judge)
+make run                        # Full pipeline (Ingester + Scanner + Judge)
 make run-api                    # FastAPI server on port 8000
 make run-dashboard              # React dashboard on port 3000
 python -m sentinel --with-api   # Full pipeline + API in one process
@@ -38,53 +38,92 @@ make check                      # lint + typecheck + test
 Penumbra is a real-time intelligence pipeline that monitors Polymarket (a prediction market) for **informed flow** — trades likely driven by private information. It runs as a single async process with three stages connected by `asyncio.Queue` (single-writer to DuckDB, no contention).
 
 ```
-Polymarket WebSocket → Ingester → DuckDB → Scanner → Judge → FastAPI → Dashboard
+Polymarket WS + REST --> Ingester --> DuckDB --> Scanner --> Judge --> FastAPI --> Dashboard
 ```
 
 ### Stage 1: Ingester (`sentinel/ingester/`)
-Subscribes to Polymarket's CLOB WebSocket. Parses `Trade` and `BookEvent` models, batches writes to DuckDB (20 trades / 1s), and periodically syncs market metadata via REST.
+
+Two data sources feed trades into DuckDB:
+
+- **WebSocket** (`listener.py`): Subscribes to Polymarket's CLOB WS for `last_trade_price` events and `price_changes` (order book). Subscriptions refresh every 30 min as the hot tier updates.
+- **REST poller** (`poller.py`): Polls `data-api.polymarket.com/trades` for the top 50 hot-tier markets every 5s. Uses a bounded LRU set (200K) for dedup.
+
+Trades are batched by `writer.py` (20 trades or 1s, whichever comes first) and written to DuckDB. Book events are used only for `book_snapshots` (liquidity cliff detection) — they do not enter the scanner queue.
+
+**Market intelligence** (`market_scorer.py`): On first sync, all ~3900 markets are scored for insider-trading attractiveness via Amazon Nova Lite (separate 4,000/day budget). The priority formula `(attractiveness/100) x time_weight x uncertainty x liquidity_scaling` ranks markets into a hot tier of 50 that gets intensive polling.
+
+Markets are fully synced every 2 hours. Markets absent from the API response are marked `active=false` automatically.
 
 ### Stage 2: Scanner (`sentinel/scanner/`)
-Polls DuckDB and scores trades on four dimensions (0–100 composite) plus two multipliers:
 
-**Component scores:**
-- **Volume anomaly × OFI** (0–40 pts): MAD-based modified Z-score (robust to fat tails) amplified by Order Flow Imbalance — the ratio of directional buy/sell volume. Pure volume without directional skew is penalised (×0.8); strongly aligned flow (|OFI| ≥ 0.7) matching the trade direction is boosted (×1.5). Grounded in Andersen & Bondarenko (2014) critique of VPIN and the Polymarket anatomy paper (arXiv 2025).
-- **Price impact** (0–20 pts): `size_usd / liquidity_usd` — Kyle's lambda proxy. Normalised against stored market liquidity.
-- **Wallet reputation** (0–20 pts): Historical win rate on resolved markets + market concentration bonus (up to +10 pts if ≥80% of recent wallet trades are on this single market — concentrated domain exposure is a key insider indicator).
-- **Funding anomaly** (0–20 pts): Wallet age via Polygon RPC (Alchemy).
+Scores each trade on four base components (sum to 100 max) plus multiplicative boosters:
 
-**Multipliers (applied to total after components):**
-- **Time-to-resolution urgency**: Trades placed < 24 h before market end_date score ×1.4; 24–72 h ×1.2; 72 h+ ×1.0. Grounded in Kyle (1985) — informed traders trade closest to resolution.
+**Base components:**
+- **Volume anomaly x OFI** (0-40 pts): MAD-based modified Z-score amplified by Order Flow Imbalance. Aligned directional flow (|OFI| >= 0.7) boosts x1.5; balanced flow penalises x0.8.
+- **Price impact** (0-20 pts): `|deltaP| / liquidity x size_usd`. Falls back to $10K liquidity when Polymarket returns null.
+- **Wallet reputation** (0-20 pts): Win rate on resolved markets + concentration bonus (+5-10 pts if >= 50-80% of wallet's recent trades target this single market).
+- **Funding anomaly** (0-20 pts): Wallet age via Alchemy RPC. Tiered decay: 20 pts (<15 min) down to 0 pts (>72h).
 
-Signals scoring ≥ 30 are forwarded to the Judge queue.
+**Multipliers (applied after base, score is uncapped):**
+- **Time-to-resolution**: x1.4 (<24h), x1.2 (24-72h)
+- **Liquidity cliff**: x1.2 if spread widened >30% in last 10 min
+- **Coordination**: x1.15-1.3 if >= 3 distinct wallets traded same side in 5-min window
 
-**Key data fields on Signal:** `ofi_score` (order flow imbalance −1→1), `hours_to_resolution` (int|None), `market_concentration` (fraction of wallet's recent trades on this market).
+Signals scoring >= 30 are forwarded to the Judge queue.
 
 ### Stage 3: Judge (`sentinel/judge/`)
-Two-tier LLM classification via AWS Bedrock:
-- **Tier 1 (Amazon Nova Lite)**: Binary INFORMED/NOISE with confidence — ~5,000 calls/day budget
-- **Tier 2 (Amazon Nova Pro)**: Optional deep reasoning for high-confidence signals (disabled by default)
 
-News context (Tavily Search) is fetched and cached 12 hours for signals ≥ 70. `budget.py` enforces daily call limits tracked in DuckDB's `llm_budget` table.
+Two-tier LLM classification via AWS Bedrock with 8-worker parallel pool:
+
+- **Tier 1 (Amazon Nova Lite)**: Binary INFORMED/NOISE with confidence. 5,000 calls/day budget.
+- **Tier 2 (Amazon Nova Pro)**: Deep reasoning for T1 confidence >= 60. Disabled by default (0/day budget).
+
+News context (Tavily, Exa fallback) is fetched and cached 12h for signals scoring >= 70. Budget is tracked in DuckDB's `llm_budget` table with atomic check-and-increment to prevent races.
 
 ### API (`sentinel/api/`)
-FastAPI app on port 8000. Key routes: `/api/signals`, `/api/signals/stats`, `/api/markets`, `/api/wallets`, `/api/budget`, `/api/metrics`. In production, also serves the built React dashboard from `dashboard/dist`.
+
+FastAPI on port 8000. Routes: `/api/signals`, `/api/signals/stats`, `/api/markets`, `/api/markets/{id}`, `/api/markets/{id}/volume`, `/api/markets/{id}/anomalies`, `/api/watchlist`, `/api/wallets`, `/api/wallets/{addr}`, `/api/budget`, `/api/metrics/timeseries`, `/api/metrics/overview`, `/api/metrics/accuracy`, `/api/metrics/patterns`, `/api/metrics/ingestion`, `/api/health`. In production, serves the built React dashboard from `dashboard/dist`.
 
 ### Dashboard (`dashboard/`)
-Vite + React + TypeScript app on port 3000 (dev). Uses React Query for data fetching, Recharts for charts, Tailwind CSS for styling. Four pages: Feed, MarketView, WalletView, Metrics.
+
+Vite + React + TypeScript on port 3000 (dev). React Query for data fetching, Recharts for charts, Tailwind CSS with dark theme. Seven pages: Feed (signal table with filters), Watchlist (hot-tier priority ranking), Markets (all markets by tier), MarketView (detail + volume chart), Wallets (smart money leaderboard), WalletView (profile + trades + signals), Metrics (pipeline analytics + accuracy + patterns).
 
 ### Database (`sentinel/db/`)
-DuckDB (local OLAP, in-process). Core tables: `markets`, `trades`, `signals`, `signal_reasoning`, `llm_budget`, `book_snapshots`. Views: `v_hourly_volume`, `v_volume_anomalies`, `v_volume_anomalies_5m`, `v_5m_volume`, `v_order_flow_imbalance`, `v_coordination_signals`, `v_wallet_performance`.
+
+DuckDB (local OLAP, in-process). Single-writer architecture.
+
+**Tables:** `markets` (with `token_ids`, `attractiveness_score`), `trades`, `signals`, `signal_reasoning`, `llm_budget`, `book_snapshots`.
+
+**Views:** `v_hourly_volume`, `v_volume_anomalies`, `v_volume_anomalies_5m`, `v_5m_volume`, `v_order_flow_imbalance`, `v_coordination_signals`, `v_wallet_performance`.
+
+Migrations (v002-v010) are applied idempotently in `init_schema()`.
 
 ## Key Configuration
 
-`sentinel/config.py` is a Pydantic `BaseSettings` class — all environment variables are defined here. See `.env.example` for the full list. Required external services: AWS Bedrock (credentials), Alchemy (Polygon RPC), Tavily (news search).
+`sentinel/config.py` is a Pydantic `BaseSettings` singleton. All values are loaded from environment variables or `.env`. Key defaults:
+
+| Setting | Default | Purpose |
+|---------|---------|---------|
+| `zscore_threshold` | 2.0 | Modified Z-score threshold for volume anomaly |
+| `min_trade_size_usd` | 100 | Minimum trade size to process |
+| `signal_min_score` | 30 | Minimum composite score to emit signal |
+| `alert_min_score` | 80 | Minimum score for alert emission |
+| `bedrock_tier1_daily_limit` | 5000 | Judge Tier 1 daily call budget |
+| `bedrock_market_scoring_daily_limit` | 4000 | Market attractiveness scoring budget (separate pool) |
+| `hot_market_count` | 50 | Size of hot polling tier |
+| `ingester_batch_size` | 20 | Trades per write batch |
+| `trade_poll_interval_seconds` | 5 | REST poller frequency |
+| `market_sync_interval_hours` | 2 | Full market metadata re-sync |
+
+Required external services: AWS Bedrock (credentials via boto3 chain), Alchemy (Polygon RPC), Tavily (news search).
 
 ## Testing
 
-- Test markers: `@pytest.mark.integration` (needs live APIs), `@pytest.mark.slow` (>10s)
+- 325+ tests across unit, regression, and integration suites
+- Markers: `@pytest.mark.integration` (needs live APIs), `@pytest.mark.slow` (>10s)
 - Mocking: `moto[bedrock]` for AWS Bedrock, `respx` for httpx HTTP calls
 - `make test` runs unit tests only (excludes `integration` marker)
+- Test fixtures use in-memory DuckDB with `init_schema()` — no external dependencies
 
 ## Code Style
 

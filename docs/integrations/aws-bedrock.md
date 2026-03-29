@@ -8,8 +8,9 @@
 
 | Tier | Model | Role | Cost/call | Daily Cap |
 |------|-------|------|-----------|-----------|
-| **1 — Classifier** | Amazon Nova Lite | Quick “Informed vs Noise” classification | ~$0.0001 | 200 |
-| **2 — Reasoner** | Amazon Nova Pro | Detailed reasoning for high-suspicion trades | ~$0.002 | 30 |
+| **1 — Classifier** | Amazon Nova Lite | Quick “Informed vs Noise” classification | ~$0.0001 | 5,000 |
+| **2 — Reasoner** | Amazon Nova Pro | Detailed reasoning for high-suspicion trades | ~$0.002 | 0 (disabled) |
+| **Market Scoring** | Amazon Nova Lite | One-time attractiveness score per market | ~$0.0001 | 4,000 (separate pool) |
 
 See [ADR-003](../architecture/adr-003-bedrock-budget.md) for full cost analysis.
 
@@ -188,18 +189,19 @@ except ClientError as e:
 ## Environment Variables
 
 ```
-AWS_ACCESS_KEY_ID=AKIA...
-AWS_SECRET_ACCESS_KEY=...
+# Credentials resolved via boto3 default chain (IAM role, env vars, ~/.aws/credentials)
 AWS_REGION=us-east-1
 BEDROCK_TIER1_MODEL=amazon.nova-lite-v1:0
-BEDROCK_TIER1_DAILY_LIMIT=200
+BEDROCK_TIER1_DAILY_LIMIT=5000
+BEDROCK_MARKET_SCORING_DAILY_LIMIT=4000   # Separate pool for market attractiveness
 BEDROCK_TIER2_MODEL=amazon.nova-pro-v1:0
-BEDROCK_TIER2_DAILY_LIMIT=30
+BEDROCK_TIER2_DAILY_LIMIT=0               # Set >0 to enable Tier 2
 BEDROCK_TIER2_MIN_SUSPICION=60
+JUDGE_MAX_WORKERS=8
 ```
 
 ## Testing
 
 - **Unit**: Mock `boto3.client` with `moto` or `unittest.mock`. Assert prompt structure and response parsing.
 - **Integration**: Call Bedrock with a canned trade. Assert response parses to valid JSON with required fields.
-- **Budget**: Test that the 201st call in a day is rejected and queued.
+- **Budget**: Test that calls beyond the daily limit are rejected (atomic `UPDATE ... WHERE calls_used < calls_limit`).
