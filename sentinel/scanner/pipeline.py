@@ -26,6 +26,7 @@ import structlog
 from sentinel.config import settings
 from sentinel.ingester.models import IngesterEvent, Trade
 from sentinel.scanner.funding import check_funding_anomaly
+from sentinel.scanner.kyle_lambda import get_cached_lambda
 from sentinel.scanner.price_impact import get_price_impact
 from sentinel.scanner.scorer import Signal, build_signal, write_signal
 from sentinel.scanner.volume import (
@@ -39,6 +40,7 @@ from sentinel.scanner.volume import (
     get_zscore_5m_for_market,
     get_zscore_for_market,
 )
+from sentinel.scanner.vpin import VPINTracker
 from sentinel.scanner.wallet_profiler import get_resolved_trade_count, get_wallet_profile
 
 logger = structlog.get_logger()
@@ -67,6 +69,7 @@ class Scanner:
         self._judge_queue = judge_queue
         self._dry_run = dry_run
         self._running = True
+        self._vpin_tracker = VPINTracker(conn)
 
         # Counters
         self._trades_scanned = 0
@@ -111,7 +114,15 @@ class Scanner:
         """Run the four detection layers on a single trade."""
         self._trades_scanned += 1
 
-        # Skip tiny trades
+        # Accumulate into VPIN buckets (ALL trades, including small ones)
+        try:
+            self._vpin_tracker.add_trade(
+                trade.market_id, trade.side, float(trade.size_usd), trade.timestamp,
+            )
+        except Exception as exc:
+            logger.debug("VPIN accumulation failed", market=trade.market_id, error=str(exc))
+
+        # Skip tiny trades (for scoring, not for VPIN)
         if float(trade.size_usd) < settings.min_trade_size_usd:
             return
 
@@ -245,6 +256,22 @@ class Scanner:
             except Exception as exc:
                 logger.debug("Position lookup failed", wallet=trade.wallet[:10], error=str(exc))
 
+        # 10. VPIN percentile (Plan B Phase 1 — data collection only)
+        vpin_percentile: float | None = None
+        try:
+            vpin_percentile = self._vpin_tracker.get_vpin_percentile(trade.market_id)
+        except Exception as exc:
+            logger.debug("VPIN lookup failed", market=trade.market_id, error=str(exc))
+
+        # 11. Kyle's Lambda (Plan B Phase 1 — data collection only)
+        lambda_value: float | None = None
+        try:
+            lam = get_cached_lambda(self._conn, trade.market_id)
+            if lam is not None:
+                lambda_value = lam[0]  # Store lambda coefficient
+        except Exception as exc:
+            logger.debug("Lambda failed", market=trade.market_id, error=str(exc))
+
         # Build and score the signal
         signal = build_signal(
             trade_id=trade.trade_id,
@@ -268,6 +295,8 @@ class Scanner:
             coordination_wallet_count=coordination_wallet_count,
             liquidity_cliff=liquidity_cliff,
             position_trade_count=position_trade_count,
+            vpin_percentile=vpin_percentile,
+            lambda_value=lambda_value,
         )
 
         if signal.statistical_score < settings.signal_min_score:

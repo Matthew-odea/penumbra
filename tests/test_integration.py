@@ -83,10 +83,11 @@ def _full_db() -> duckdb.DuckDBPyConnection:
         score = 30 + i * 10
         conn.execute(
             "INSERT INTO signals VALUES "
-            "(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             [sid, f"trade-{i:03d}", mid, wallet, "BUY", 0.65, 5000.0,
              base + timedelta(minutes=i * 15),
-             3.5, 2.1, 0.03, 0.72, 15, False, False, None, score, 0.0, None, 0.0, 0, False, 2, 0, now],
+             3.5, 2.1, 0.03, 0.72, 15, False, False, None, score, 0.0, None, 0.0, 0, False, 2, 0,
+             None, None, now],
         )
 
     # Reasoning for first 6 signals

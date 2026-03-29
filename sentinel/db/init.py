@@ -115,6 +115,9 @@ CREATE TABLE IF NOT EXISTS signals (
     -- Scoring metadata
     scoring_version     INTEGER,                      -- Formula version (1=pre-fix, 2=post-fix)
     position_trade_count INTEGER DEFAULT 0,           -- Wallet's trade count on this market+side
+    -- Plan B Phase 1: microstructure metrics (data collection)
+    vpin_percentile     DECIMAL(5, 4),                -- VPIN percentile [0, 1] vs 7-day history
+    lambda_value        DECIMAL(10, 6),               -- Kyle's Lambda coefficient for the market
     created_at          TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -390,6 +393,33 @@ WHERE wallet != ''
   AND timestamp >= CURRENT_TIMESTAMP - INTERVAL '7 days'
 GROUP BY wallet, market_id, side
 HAVING COUNT(*) >= 3;
+
+-- ─── Plan B Phase 1: VPIN + Kyle's Lambda ─────────────────────────────────
+
+-- VPIN volume-synchronized buckets
+CREATE TABLE IF NOT EXISTS vpin_buckets (
+    market_id      VARCHAR NOT NULL,
+    bucket_idx     INTEGER NOT NULL,
+    bucket_end     TIMESTAMP NOT NULL,
+    buy_vol        DECIMAL(18, 6),
+    sell_vol       DECIMAL(18, 6),
+    bucket_volume  DECIMAL(18, 6),  -- buy_vol + sell_vol (denormalized for query speed)
+    PRIMARY KEY (market_id, bucket_idx)
+);
+
+CREATE INDEX IF NOT EXISTS idx_vpin_market_end
+    ON vpin_buckets (market_id, bucket_end);
+
+-- Kyle's Lambda estimates per market
+CREATE TABLE IF NOT EXISTS market_lambda (
+    market_id    VARCHAR NOT NULL,
+    estimated_at TIMESTAMP NOT NULL,
+    lambda_value DECIMAL(12, 8),
+    r_squared    DECIMAL(8, 6),
+    residual_std DECIMAL(12, 8),
+    n_obs        INTEGER,
+    PRIMARY KEY (market_id, estimated_at)
+);
 """
 
 
@@ -496,6 +526,16 @@ def init_schema(db_path: Path | None = None) -> duckdb.DuckDBPyConnection:
         conn.execute("ALTER TABLE signals ADD COLUMN position_trade_count INTEGER")
         conn.execute("UPDATE signals SET position_trade_count = 0 WHERE position_trade_count IS NULL")
         logger.info("Migration: added 'position_trade_count' column to signals table")
+
+    # v013: VPIN percentile on signals (Plan B Phase 1)
+    if "vpin_percentile" not in sig_cols:
+        conn.execute("ALTER TABLE signals ADD COLUMN vpin_percentile DECIMAL(5, 4)")
+        logger.info("Migration: added 'vpin_percentile' column to signals table")
+
+    # v014: Lambda residual on signals (Plan B Phase 1)
+    if "lambda_value" not in sig_cols:
+        conn.execute("ALTER TABLE signals ADD COLUMN lambda_value DECIMAL(10, 6)")
+        logger.info("Migration: added 'lambda_value' column to signals table")
 
     # Force WAL checkpoint so all schema changes are flushed to the .duckdb
     # file before this function returns.  Without this, if the process is

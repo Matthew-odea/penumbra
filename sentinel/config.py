@@ -76,6 +76,16 @@ class Settings(BaseSettings):
     wallet_whitelist_win_rate: float = 0.65
     wallet_whitelist_min_trades: int = 20
 
+    # VPIN parameters (Plan B Phase 1)
+    vpin_bucket_divisor: int = 50          # avg_daily_volume / divisor = bucket size
+    vpin_min_bucket_size: float = 100.0    # Minimum bucket size in USD
+    vpin_lookback_buckets: int = 50        # Number of trailing buckets for VPIN
+    vpin_min_buckets: int = 5              # Minimum completed buckets before reporting VPIN
+
+    # Kyle's Lambda parameters (Plan B Phase 1)
+    lambda_min_observations: int = 6       # Minimum 5-min windows for OLS (30 min of data)
+    lambda_window_minutes: int = 60        # Rolling window for Lambda estimation
+
     # Scorer weight caps (points out of 100) — must sum to 100
     scorer_weight_volume: int = 40
     scorer_weight_impact: int = 20

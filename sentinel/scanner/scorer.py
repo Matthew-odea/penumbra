@@ -69,6 +69,8 @@ class Signal:
     liquidity_cliff: bool = False        # Spread widened >30% in 10 min before trade
     scoring_version: int = SCORING_VERSION  # Formula version that produced this score
     position_trade_count: int = 0        # Wallet's trade count on this market+side (accumulation)
+    vpin_percentile: float | None = None  # VPIN percentile [0, 1] vs 7-day market history
+    lambda_value: float | None = None     # Kyle's Lambda coefficient for the market
 
     def as_db_tuple(self) -> tuple:
         """Return a tuple matching the DuckDB ``signals`` INSERT order."""
@@ -97,6 +99,8 @@ class Signal:
             self.liquidity_cliff,
             self.scoring_version,
             self.position_trade_count,
+            self.vpin_percentile,
+            self.lambda_value,
             self.created_at,
         )
 
@@ -298,6 +302,8 @@ def build_signal(
     coordination_wallet_count: int = 0,
     liquidity_cliff: bool = False,
     position_trade_count: int = 0,
+    vpin_percentile: float | None = None,
+    lambda_value: float | None = None,
 ) -> Signal:
     """Construct a scored ``Signal`` from individual metrics."""
     stat_score = compute_statistical_score(
@@ -342,6 +348,8 @@ def build_signal(
         liquidity_cliff=liquidity_cliff,
         scoring_version=SCORING_VERSION,
         position_trade_count=position_trade_count,
+        vpin_percentile=vpin_percentile,
+        lambda_value=lambda_value,
         statistical_score=stat_score,
         created_at=datetime.now(tz=UTC),
     )
@@ -357,8 +365,9 @@ INSERT OR IGNORE INTO signals (
     funding_anomaly, funding_age_minutes, statistical_score,
     ofi_score, hours_to_resolution, market_concentration,
     coordination_wallet_count, liquidity_cliff,
-    scoring_version, position_trade_count, created_at
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    scoring_version, position_trade_count,
+    vpin_percentile, lambda_value, created_at
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 """
 
 
