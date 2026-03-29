@@ -126,7 +126,7 @@ def rescore(db_path: Path | None = None, *, dry_run: bool = False, conn: object 
 
     if dry_run:
         logger.info("DRY RUN — no changes written")
-    else:
+    elif updates:
         conn.executemany(_UPDATE_SQL, updates)  # type: ignore[union-attr]
         logger.info("Scores updated in DB", count=len(updates))
 
