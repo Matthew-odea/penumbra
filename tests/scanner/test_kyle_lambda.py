@@ -60,7 +60,7 @@ def _insert_correlated_trades(conn: duckdb.DuckDBPyConnection, n_windows: int = 
         # delta_price proportional to signed_volume
         net_flow = buy_size - sell_size
         start_price = 0.50
-        end_price = start_price + net_flow * 0.00001  # Small positive correlation
+        end_price = start_price + net_flow * 0.0001  # Positive correlation
         conn.execute(
             "INSERT INTO trades VALUES (?, 'm1', 'a1', 'w1', 'BUY', ?, ?, ?, NULL, 'rest',"
             " CURRENT_TIMESTAMP)",

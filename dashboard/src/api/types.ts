@@ -18,19 +18,15 @@ export interface Signal {
   funding_age_minutes: number | null
   statistical_score: number
   created_at: string
-  // Enriched signals (sprint 4)
+  // Enriched signals
   ofi_score: number | null
   hours_to_resolution: number | null
   market_concentration: number | null
-  // Reasoning (may be null if Judge hasn't processed yet)
-  classification: 'INFORMED' | 'NOISE' | null
-  tier1_confidence: number | null
-  suspicion_score: number | null
-  reasoning: string | null
-  key_evidence: string | null
-  news_headlines: string[]
-  tier1_model: string | null
-  tier2_model: string | null
+  coordination_wallet_count: number | null
+  liquidity_cliff: boolean | null
+  position_trade_count: number | null
+  // Template explanation (non-null for score >= 80)
+  explanation: string | null
   // Market metadata
   market_question: string | null
   category: string | null
@@ -136,8 +132,7 @@ export interface WalletTrade {
 
 export interface Budget {
   date: string
-  tier1: BudgetTier
-  tier2: BudgetTier
+  market_scoring: BudgetTier
 }
 
 export interface BudgetTier {
@@ -156,8 +151,6 @@ export interface TimeseriesPoint {
   bucket: string
   trades: number
   signals: number
-  llm_t1: number
-  llm_t2: number
   alerts: number
 }
 
@@ -165,14 +158,11 @@ export interface MetricsOverview {
   funnel: {
     trades: number
     signals: number
-    classified: number
     high_suspicion: number
   }
-  classification: Record<string, number>
   score_distribution: Record<string, number>
   top_markets: TopMarket[]
   top_traded_markets: TopTradedMarket[]
-  tier2_coverage: { real: number; fallback: number; total: number }
   market_coverage: {
     total: number
     hot_eligible: number
@@ -206,9 +196,8 @@ export interface MarketAccuracy {
   category: string | null
   resolved_price: number | null
   signal_count: number
-  informed_count: number
-  noise_count: number
-  correct_informed: number
+  high_score_count: number
+  correct_high_score: number
   accuracy_pct: number | null
 }
 
@@ -216,7 +205,7 @@ export interface HourPattern {
   hour: number
   trades: number
   signals: number
-  informed: number
+  high_suspicion: number
 }
 
 export interface TopMarket {
@@ -265,6 +254,5 @@ export interface CalibrationBucket {
   total: number
   correct: number
   accuracy_pct: number | null
-  predicted_informed: number
   true_positives: number
 }

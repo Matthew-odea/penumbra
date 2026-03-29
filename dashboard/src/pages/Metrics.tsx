@@ -58,19 +58,13 @@ export default function Metrics() {
   }))
 
   const funnel = overview?.funnel
-  const classification = overview?.classification ?? {}
   const scoreDist = overview?.score_distribution ?? {}
   const topMarkets = overview?.top_markets ?? []
   const topTradedMarkets = overview?.top_traded_markets ?? []
-  const t2cov = overview?.tier2_coverage ?? { real: 0, fallback: 0, total: 0 }
-
-  const t1Used = budget?.tier1.calls_used ?? 0
-  const t1Limit = budget?.tier1.calls_limit ?? 1
-  const t1Pct = Math.min(100, Math.round((t1Used / t1Limit) * 100))
-
-  const t2CovPct = t2cov.total > 0 ? Math.round((t2cov.real / t2cov.total) * 100) : null
-
   const coverage = overview?.market_coverage
+
+  const ms = budget?.market_scoring
+  const msPct = ms ? Math.min(100, Math.round((ms.calls_used / ms.calls_limit) * 100)) : 0
 
   return (
     <div className="px-5 py-4 space-y-5 max-w-[1600px] mx-auto">
@@ -127,7 +121,7 @@ export default function Metrics() {
                   axisLine={false}
                   tickLine={false}
                 />
-                {/* Right axis: signals / llm / alerts */}
+                {/* Right axis: signals / alerts */}
                 <YAxis
                   yAxisId="events"
                   orientation="right"
@@ -152,8 +146,6 @@ export default function Metrics() {
                 />
                 <Line yAxisId="trades" type="monotone" dataKey="trades" stroke="#525252" strokeWidth={1.5} dot={false} name="Trades" />
                 <Line yAxisId="events" type="monotone" dataKey="signals" stroke="#f59e0b" strokeWidth={1.5} dot={false} name="Signals" />
-                <Line yAxisId="events" type="monotone" dataKey="llm_t1" stroke="#3b82f6" strokeWidth={1.5} dot={false} name="LLM T1" />
-                <Line yAxisId="events" type="monotone" dataKey="llm_t2" stroke="#8b5cf6" strokeWidth={1.5} dot={false} name="LLM T2" strokeDasharray="4 2" />
                 <Line yAxisId="events" type="monotone" dataKey="alerts" stroke="#ef4444" strokeWidth={2} dot={false} name="Alerts (≥80)" />
               </LineChart>
             </ResponsiveContainer>
@@ -187,7 +179,7 @@ export default function Metrics() {
         />
       </div>
 
-      {/* Ingestion source area chart (24h) */}
+      {/* Ingestion area chart (24h) */}
       {(ingestion?.hourly?.length ?? 0) > 0 && (
         <div className="bg-surface-1 border border-border-subtle rounded-sm p-4">
           <div className="text-[11px] uppercase tracking-wider text-neutral-500 mb-3">
@@ -275,7 +267,7 @@ export default function Metrics() {
         </div>
       )}
 
-      {/* ── Row 2: Top Traded Markets + Score Distribution + Classification ─── */}
+      {/* ── Row 2: Top Traded Markets + Score Distribution + Budget ─── */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
         {/* Most Traded Markets */}
         <div className="bg-surface-1 border border-border-subtle rounded-sm p-4">
@@ -336,11 +328,10 @@ export default function Metrics() {
           )}
           {/* Funnel stats as compact row below chart */}
           {funnel && (
-            <div className="mt-3 pt-3 border-t border-border-subtle grid grid-cols-4 gap-2">
+            <div className="mt-3 pt-3 border-t border-border-subtle grid grid-cols-3 gap-2">
               {([
                 { label: 'Trades', value: funnel.trades, color: 'text-neutral-300' },
                 { label: 'Signals', value: funnel.signals, color: 'text-amber-400' },
-                { label: 'Classified', value: funnel.classified, color: 'text-blue-400' },
                 { label: '≥80', value: funnel.high_suspicion, color: 'text-red-400' },
               ] as const).map(({ label, value, color }) => (
                 <div key={label} className="text-center">
@@ -397,125 +388,35 @@ export default function Metrics() {
           </div>
         </div>
 
-        {/* Classification + Budget */}
-        <div className="space-y-4">
-          {/* Classification Breakdown */}
-          <div className="bg-surface-1 border border-border-subtle rounded-sm p-4">
-            <div className="text-[11px] uppercase tracking-wider text-neutral-500 mb-3">
-              Classification (Today)
-            </div>
-            <div className="flex items-end gap-6">
-              <div>
-                <div className="font-mono text-2xl font-medium text-red-400">
-                  {fmtNum(classification['INFORMED'] ?? 0)}
-                </div>
-                <div className="text-[11px] text-neutral-500 mt-0.5">INFORMED</div>
-              </div>
-              <div>
-                <div className="font-mono text-2xl font-medium text-neutral-500">
-                  {fmtNum(classification['NOISE'] ?? 0)}
-                </div>
-                <div className="text-[11px] text-neutral-500 mt-0.5">NOISE</div>
-              </div>
-              <div className="text-xs text-neutral-600 pb-1">
-                {(() => {
-                  const total = (classification['INFORMED'] ?? 0) + (classification['NOISE'] ?? 0)
-                  if (total === 0) return '—'
-                  return `${Math.round(((classification['INFORMED'] ?? 0) / total) * 100)}% informed`
-                })()}
-              </div>
-            </div>
-            <div className="w-full mt-3">
-              <div className="h-2 bg-surface-3 rounded-full overflow-hidden flex">
-                {(() => {
-                  const total = (classification['INFORMED'] ?? 0) + (classification['NOISE'] ?? 0)
-                  if (total === 0) return null
-                  const informedPct = Math.round(((classification['INFORMED'] ?? 0) / total) * 100)
-                  return (
-                    <>
-                      <div className="h-full bg-red-500 transition-all" style={{ width: `${informedPct}%` }} />
-                      <div className="h-full bg-neutral-600 transition-all flex-1" />
-                    </>
-                  )
-                })()}
-              </div>
-              <div className="flex justify-between text-[10px] text-neutral-600 mt-1">
-                <span>INFORMED</span>
-                <span>NOISE</span>
-              </div>
-            </div>
-            {/* T2 Coverage */}
-            {t2cov.total > 0 && (
-              <div className="mt-3 pt-3 border-t border-border-subtle">
-                <div className="text-[10px] uppercase tracking-wider text-neutral-600 mb-1">
-                  T2 Coverage (Today)
-                </div>
-                <div className="flex items-center gap-3">
-                  <div className="flex-1 h-1.5 bg-surface-3 rounded-full overflow-hidden flex">
-                    <div
-                      className="h-full bg-purple-500 transition-all"
-                      style={{ width: `${t2CovPct ?? 0}%` }}
-                    />
-                  </div>
-                  <span className="font-mono text-[11px] text-neutral-400 shrink-0">
-                    {t2CovPct ?? 0}% real · {t2cov.fallback} fallback
-                  </span>
-                </div>
-              </div>
-            )}
+        {/* Market Scoring Budget */}
+        <div className="bg-surface-1 border border-border-subtle rounded-sm p-4">
+          <div className="text-[11px] uppercase tracking-wider text-neutral-500 mb-3">
+            Market Scoring Budget (Today)
           </div>
-
-          {/* LLM Budget Gauge */}
-          <div className="bg-surface-1 border border-border-subtle rounded-sm p-4">
-            <div className="text-[11px] uppercase tracking-wider text-neutral-500 mb-3">
-              LLM Budget (Today)
-            </div>
-            {/* T1 */}
-            <div className="mb-2">
+          {ms ? (
+            <div className="space-y-3">
               <div className="flex items-center gap-3">
-                <span className="text-[10px] text-neutral-600 w-4">T1</span>
                 <div className="flex-1">
                   <div className="h-2.5 bg-surface-3 rounded-full overflow-hidden">
                     <div
                       className={`h-full rounded-full transition-all ${
-                        t1Pct > 80 ? 'bg-red-500' : t1Pct > 50 ? 'bg-amber-500' : 'bg-emerald-500'
+                        msPct > 80 ? 'bg-red-500' : msPct > 50 ? 'bg-amber-500' : 'bg-emerald-500'
                       }`}
-                      style={{ width: `${t1Pct}%` }}
+                      style={{ width: `${msPct}%` }}
                     />
                   </div>
                 </div>
-                <span className="font-mono text-xs text-neutral-400 w-16 text-right">
-                  {t1Used}/{t1Limit}
+                <span className="font-mono text-xs text-neutral-400 w-20 text-right">
+                  {ms.calls_used}/{ms.calls_limit}
                 </span>
               </div>
+              <div className="text-[11px] text-neutral-600">
+                {msPct}% used · {ms.calls_limit - ms.calls_used} remaining today
+              </div>
             </div>
-            {/* T2 */}
-            {(() => {
-              const t2Used = budget?.tier2.calls_used ?? 0
-              const t2Limit = budget?.tier2.calls_limit ?? 1
-              const t2Pct = Math.min(100, Math.round((t2Used / t2Limit) * 100))
-              return (
-                <div>
-                  <div className="flex items-center gap-3">
-                    <span className="text-[10px] text-neutral-600 w-4">T2</span>
-                    <div className="flex-1">
-                      <div className="h-2.5 bg-surface-3 rounded-full overflow-hidden">
-                        <div
-                          className={`h-full rounded-full transition-all ${
-                            t2Pct > 80 ? 'bg-red-500' : t2Pct > 50 ? 'bg-amber-500' : 'bg-purple-500'
-                          }`}
-                          style={{ width: `${t2Pct}%` }}
-                        />
-                      </div>
-                    </div>
-                    <span className="font-mono text-xs text-neutral-400 w-16 text-right">
-                      {t2Used}/{t2Limit}
-                    </span>
-                  </div>
-                </div>
-              )
-            })()}
-          </div>
+          ) : (
+            <div className="text-neutral-600 text-sm">No budget data.</div>
+          )}
         </div>
       </div>
 
@@ -526,7 +427,7 @@ export default function Metrics() {
             Hour-of-Day Trading Patterns (7d)
           </div>
           <div className="text-[10px] text-neutral-600 mb-3">
-            Trades, signals, and INFORMED classifications by UTC hour
+            Trades, signals, and high-suspicion signals by UTC hour
           </div>
           <div className="h-44">
             <ResponsiveContainer width="100%" height="100%">
@@ -565,7 +466,7 @@ export default function Metrics() {
                 <Legend wrapperStyle={{ fontSize: '11px', color: '#737373' }} iconType="square" />
                 <Bar dataKey="trades" fill="#404040" name="Trades" maxBarSize={16} />
                 <Bar dataKey="signals" fill="#f59e0b" name="Signals" maxBarSize={16} />
-                <Bar dataKey="informed" fill="#ef4444" name="INFORMED" maxBarSize={16} />
+                <Bar dataKey="high_suspicion" fill="#ef4444" name="≥80 Score" maxBarSize={16} />
               </BarChart>
             </ResponsiveContainer>
           </div>
@@ -727,15 +628,15 @@ export default function Metrics() {
         </div>
       )}
 
-      {/* ── Row 5c: Classification Accuracy (Resolved Markets) ────── */}
+      {/* ── Row 5c: Score Accuracy (Resolved Markets) ────────────── */}
       {accuracy.length > 0 && (
         <div className="bg-surface-1 border border-border-subtle rounded-sm">
           <div className="px-4 py-3 border-b border-border-subtle flex items-center justify-between">
             <span className="text-[11px] uppercase tracking-wider text-neutral-500">
-              Classification Accuracy — Resolved Markets
+              Score Accuracy — Resolved Markets
             </span>
             <span className="text-[10px] text-neutral-600">
-              INFORMED prediction correctness vs. actual outcome
+              High-score (≥80) prediction correctness vs. actual outcome
             </span>
           </div>
           <div className="overflow-x-auto">
@@ -745,7 +646,7 @@ export default function Metrics() {
                   <th className="py-2 px-4 font-medium">Market</th>
                   <th className="py-2 px-4 font-medium">Outcome</th>
                   <th className="py-2 px-4 font-medium text-right">Signals</th>
-                  <th className="py-2 px-4 font-medium text-right">INFORMED</th>
+                  <th className="py-2 px-4 font-medium text-right">High Score</th>
                   <th className="py-2 px-4 font-medium text-right">Correct</th>
                   <th className="py-2 px-4 font-medium text-right">Accuracy</th>
                 </tr>
@@ -775,8 +676,8 @@ export default function Metrics() {
                         </span>
                       </td>
                       <td className="py-2 px-4 text-right font-mono text-neutral-400">{m.signal_count}</td>
-                      <td className="py-2 px-4 text-right font-mono text-neutral-400">{m.informed_count}</td>
-                      <td className="py-2 px-4 text-right font-mono text-neutral-400">{m.correct_informed}</td>
+                      <td className="py-2 px-4 text-right font-mono text-neutral-400">{m.high_score_count}</td>
+                      <td className="py-2 px-4 text-right font-mono text-neutral-400">{m.correct_high_score}</td>
                       <td className="py-2 px-4 text-right font-mono">
                         {acc != null ? (
                           <span className={acc >= 70 ? 'text-emerald-400' : acc >= 40 ? 'text-amber-400' : 'text-red-400'}>

@@ -40,6 +40,7 @@ SELECT
     size_usd,
     coordination_wallet_count,
     liquidity_cliff,
+    position_trade_count,
     statistical_score
 FROM signals
 """
@@ -73,7 +74,8 @@ def rescore(db_path: Path | None = None, *, dry_run: bool = False, conn: object 
             signal_id, z_score, price_impact, wallet, is_whitelisted,
             funding_anomaly, funding_age_minutes, side, ofi_score,
             hours_to_resolution, market_concentration, wallet_total_trades,
-            size_usd, coordination_wallet_count, liquidity_cliff, old_score,
+            size_usd, coordination_wallet_count, liquidity_cliff,
+            position_trade_count, old_score,
         ) = row
 
         new_score = compute_statistical_score(
@@ -91,6 +93,7 @@ def rescore(db_path: Path | None = None, *, dry_run: bool = False, conn: object 
             size_usd=float(size_usd or 0),
             liquidity_cliff=bool(liquidity_cliff),
             coordination_wallet_count=int(coordination_wallet_count or 0),
+            position_trade_count=int(position_trade_count or 0),
         )
 
         old_scores.append(int(old_score or 0))

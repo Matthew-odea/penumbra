@@ -2,7 +2,7 @@
 # Penumbra — Makefile
 # =============================================================================
 
-.PHONY: help install dev setup-env test lint format check db-init run-ingester run-scanner run-judge run-api run-dashboard clean logs logs-live ssm fix-wal
+.PHONY: help install dev setup-env test lint format check db-init run-ingester run-scanner run-api run-dashboard clean logs logs-live ssm fix-wal
 
 PYTHON := python
 UV := uv
@@ -41,9 +41,6 @@ run-ingester: ## Run the trade ingester (Sprint 1)
 
 run-scanner: ## Run the statistical scanner (Sprint 2)
 	$(PYTHON) -m sentinel.scanner
-
-run-judge: ## Run the AI judge (Sprint 3)
-	$(PYTHON) -m sentinel.judge
 
 run-api: ## Run the FastAPI gateway
 	uvicorn sentinel.api.main:app --host 0.0.0.0 --port 8000 --reload

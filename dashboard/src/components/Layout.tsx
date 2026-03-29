@@ -8,8 +8,8 @@ export default function Layout() {
 
   const isOnline = health?.status === 'ok'
 
-  const t1Used = budget?.tier1.calls_used ?? 0
-  const t1Limit = budget?.tier1.calls_limit ?? 200
+  const t1Used = budget?.market_scoring.calls_used ?? 0
+  const t1Limit = budget?.market_scoring.calls_limit ?? 4000
 
   return (
     <div className="min-h-screen flex flex-col">

@@ -328,6 +328,7 @@ HAVING COUNT(*) >= 5;
 
 -- Signal outcome validation: joins signals to market resolution for accuracy tracking.
 -- Each row is one signal on a resolved market with its confusion matrix category.
+-- Prediction proxy: statistical_score >= 80 is treated as "INFORMED" (high-suspicion call).
 CREATE OR REPLACE VIEW v_signal_outcomes AS
 SELECT
     s.signal_id,
@@ -338,8 +339,6 @@ SELECT
     s.size_usd,
     s.statistical_score,
     s.trade_timestamp,
-    sr.classification,
-    sr.suspicion_score,
     m.question,
     m.resolved_price,
     CASE
@@ -348,25 +347,24 @@ SELECT
         THEN TRUE ELSE FALSE
     END AS trade_correct,
     CASE
-        WHEN sr.classification = 'INFORMED' AND (
+        WHEN s.statistical_score >= 80 AND (
             (s.side = 'BUY' AND m.resolved_price >= 0.95) OR
             (s.side = 'SELL' AND m.resolved_price <= 0.05)
         ) THEN 'TP'
-        WHEN sr.classification = 'INFORMED' AND NOT (
+        WHEN s.statistical_score >= 80 AND NOT (
             (s.side = 'BUY' AND m.resolved_price >= 0.95) OR
             (s.side = 'SELL' AND m.resolved_price <= 0.05)
         ) THEN 'FP'
-        WHEN sr.classification = 'NOISE' AND (
+        WHEN s.statistical_score < 80 AND (
             (s.side = 'BUY' AND m.resolved_price >= 0.95) OR
             (s.side = 'SELL' AND m.resolved_price <= 0.05)
         ) THEN 'FN'
-        WHEN sr.classification = 'NOISE' AND NOT (
+        WHEN s.statistical_score < 80 AND NOT (
             (s.side = 'BUY' AND m.resolved_price >= 0.95) OR
             (s.side = 'SELL' AND m.resolved_price <= 0.05)
         ) THEN 'TN'
     END AS confusion
 FROM signals s
-LEFT JOIN signal_reasoning sr ON s.signal_id = sr.signal_id
 JOIN markets m ON s.market_id = m.market_id
 WHERE m.resolved = TRUE
   AND m.resolved_price IS NOT NULL;

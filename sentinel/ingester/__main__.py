@@ -36,9 +36,7 @@ from sentinel.ingester.models import BookEvent, Trade
 from sentinel.ingester.poller import TradePoller
 from sentinel.ingester.writer import BatchWriter
 from sentinel.ingester.market_scorer import MarketAttractivenessInput, score_market_attractiveness
-from sentinel.judge.budget import BudgetManager
-from sentinel.judge.pipeline import Judge
-from sentinel.judge.store import Alert
+from sentinel.budget import BudgetManager
 from sentinel.scanner.pipeline import Scanner
 from sentinel.scanner.scorer import Signal
 
@@ -308,7 +306,6 @@ async def _periodic_status(
     listener: Listener,
     poller: TradePoller,
     scanner: Scanner | None,
-    judge: Judge | None,
     interval: int = 30,
 ) -> None:
     """Print a single aggregate status line every *interval* seconds."""
@@ -338,11 +335,6 @@ async def _periodic_status(
         if scanner is not None:
             parts["scanned"] = scanner.trades_scanned
             parts["signals"] = scanner.signals_emitted
-        if judge is not None:
-            parts["judged"] = judge.signals_processed
-            parts["alerts"] = judge.alerts_emitted
-            if judge.skipped_budget:
-                parts["judge_skipped"] = judge.skipped_budget
         if listener.reconnect_count:
             parts["ws_reconnects"] = listener.reconnect_count
         logger.info("status", **parts)
@@ -360,8 +352,6 @@ async def run_ingester(
     conn = None if dry_run else init_schema()
 
     scanner_queue: asyncio.Queue[list[Trade | BookEvent]] = asyncio.Queue()
-    judge_queue: asyncio.Queue[Signal] = asyncio.Queue()
-    alert_queue: asyncio.Queue[Alert] = asyncio.Queue()
     # Bounded queue prevents unbounded growth after budget exhaustion.
     # 5000 is enough for one full market sync (~3900 markets).
     scoring_queue: asyncio.Queue[str] = asyncio.Queue(maxsize=5000)
@@ -540,30 +530,16 @@ async def run_ingester(
         scanner = Scanner(
             conn,
             scanner_queue=scanner_queue,
-            judge_queue=judge_queue,
             dry_run=dry_run,
         )
         tasks.append(
             asyncio.create_task(scanner.run(), name="scanner")
         )
 
-    # 12. Judge
-    judge = None
-    if not dry_run and conn is not None:
-        judge = Judge(
-            conn,
-            judge_queue=judge_queue,
-            alert_queue=alert_queue,
-            dry_run=dry_run,
-        )
-        tasks.append(
-            asyncio.create_task(judge.run(), name="judge")
-        )
-
-    # 13. Periodic aggregate status
+    # 12. Periodic aggregate status
     tasks.append(
         asyncio.create_task(
-            _periodic_status(writer, listener, poller, scanner, judge),
+            _periodic_status(writer, listener, poller, scanner),
             name="status",
         )
     )
@@ -590,19 +566,13 @@ async def run_ingester(
 
         await writer.flush()
 
-        drain_timeout = 30.0
-        drain_awaitables = [asyncio.wait_for(scanner_queue.join(), timeout=drain_timeout)]
-        if judge is not None:
-            drain_awaitables.append(asyncio.wait_for(judge_queue.join(), timeout=drain_timeout))
-        drain_results = await asyncio.gather(*drain_awaitables, return_exceptions=True)
-        for result in drain_results:
-            if isinstance(result, asyncio.TimeoutError):
-                logger.warning("Queue drain timed out — some in-flight signals may be lost")
+        try:
+            await asyncio.wait_for(scanner_queue.join(), timeout=30.0)
+        except TimeoutError:
+            logger.warning("Scanner queue drain timed out")
 
         if scanner is not None:
             scanner.stop()
-        if judge is not None:
-            judge.stop()
 
         for t in tasks:
             t.cancel()
@@ -616,8 +586,6 @@ async def run_ingester(
             poll_cycles=poller.poll_count,
             scanner_trades=scanner.trades_scanned if scanner else 0,
             scanner_signals=scanner.signals_emitted if scanner else 0,
-            judge_processed=judge.signals_processed if judge else 0,
-            judge_alerts=judge.alerts_emitted if judge else 0,
         )
         if conn is not None:
             conn.close()

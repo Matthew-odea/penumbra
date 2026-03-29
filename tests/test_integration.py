@@ -2,28 +2,21 @@
 
 These tests verify that data flows correctly between:
   - Scanner → DuckDB → API
-  - Judge storage → API enrichment
   - Cross-endpoint consistency (market signals match wallet signals, etc.)
-  - Full pipeline: trade → signal → reasoning → API response
+  - Full pipeline: trade → signal → API response
 """
 
 from __future__ import annotations
 
-import asyncio
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
-from unittest.mock import AsyncMock, patch
 
 import duckdb
 import pytest
 from httpx import ASGITransport, AsyncClient
 
 from sentinel.db.init import SCHEMA_SQL
-from sentinel.judge.classifier import ClassificationResult
-from sentinel.judge.pipeline import Judge
-from sentinel.judge.reasoner import ReasoningResult
-from sentinel.judge.store import Alert, store_reasoning
-from sentinel.scanner.scorer import Signal, build_signal, write_signal
+from sentinel.scanner.scorer import build_signal, write_signal
 
 # ── Shared fixture ──────────────────────────────────────────────────────────
 
@@ -75,7 +68,7 @@ def _full_db() -> duckdb.DuckDBPyConnection:
              now - timedelta(days=5, hours=i), f"0xresolved{i}", now],
         )
 
-    # Signals
+    # Signals (27 columns)
     for i in range(8):
         sid = f"sig-{i:03d}"
         mid = "mkt-btc" if i < 5 else "mkt-fed"
@@ -90,24 +83,9 @@ def _full_db() -> duckdb.DuckDBPyConnection:
              None, None, now],
         )
 
-    # Reasoning for first 6 signals
-    for i in range(6):
-        sid = f"sig-{i:03d}"
-        classification = "INFORMED" if i >= 3 else "NOISE"
-        suspicion = min(30 + i * 15, 100)
-        conn.execute(
-            "INSERT INTO signal_reasoning VALUES "
-            "(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-            [sid, f"trade-{i:03d}", classification, 60 + i * 5,
-             suspicion, "Test reasoning text", "Evidence item",
-             '["headline 1"]', "nova-lite", "nova-pro" if i >= 3 else None,
-             150, 300 if i >= 3 else None, i >= 3, now],
-        )
-
-    # Budget
+    # Budget — market scoring
     today = now.date()
-    conn.execute("INSERT INTO llm_budget VALUES (?, 'tier1', 42, 200)", [today])
-    conn.execute("INSERT INTO llm_budget VALUES (?, 'tier2', 7, 30)", [today])
+    conn.execute("INSERT INTO llm_budget VALUES (?, 'market_scoring', 42, 4000)", [today])
 
     return conn
 
@@ -120,15 +98,10 @@ def int_db():
 
 @pytest.fixture()
 def int_client(int_db):
-    """Async httpx client wired to the FastAPI app with integration DB.
-
-    Patches ``get_db`` in every route module (where it was bound at import
-    time) plus the canonical ``deps`` module so that *all* call-sites resolve
-    to the per-test in-memory DuckDB.
-    """
+    """Async httpx client wired to the FastAPI app with integration DB."""
     from unittest.mock import patch as _patch
 
-    _fake = lambda db_path=None: int_db          # noqa: E731
+    _fake = lambda db_path=None: int_db  # noqa: E731
 
     from sentinel.api.main import app
 
@@ -177,18 +150,23 @@ class TestSignalToApiFlow:
         assert data[0]["statistical_score"] >= 30
 
     @pytest.mark.asyncio
-    async def test_reasoning_enriches_signal(self, int_db, int_client):
-        """A signal with reasoning should have classification in API response."""
-        resp = await int_client.get(
-            "/api/signals", params={"wallet": "0xAlpha"}
-        )
+    async def test_signal_fields_present(self, int_db, int_client):
+        """Signals should have the expected fields."""
+        resp = await int_client.get("/api/signals", params={"wallet": "0xAlpha"})
         data = resp.json()
-        # Some signals have reasoning (sig-000 through sig-005)
-        with_reasoning = [s for s in data if s.get("classification") is not None]
-        assert len(with_reasoning) > 0
-        for s in with_reasoning:
-            assert s["reasoning"] is not None
-            assert s["tier1_model"] == "nova-lite"
+        assert len(data) > 0
+        s = data[0]
+        # Core fields
+        assert "signal_id" in s
+        assert "market_id" in s
+        assert "statistical_score" in s
+        assert "side" in s
+        # explanation field exists (may be None for low scores)
+        assert "explanation" in s
+        # No LLM classification fields
+        assert "classification" not in s
+        assert "reasoning" not in s
+        assert "tier1_model" not in s
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -210,7 +188,6 @@ class TestCrossEndpointConsistency:
 
         all_ids = {s["signal_id"] for s in all_resp.json()}
         market_ids = {s["signal_id"] for s in market_resp.json()}
-        # Market endpoint delegates to list_signals with market_id filter
         assert all_ids == market_ids
 
     @pytest.mark.asyncio
@@ -261,10 +238,8 @@ class TestBudgetAndStats:
         resp = await int_client.get("/api/budget")
         assert resp.status_code == 200
         data = resp.json()
-        assert data["tier1"]["calls_used"] == 42
-        assert data["tier1"]["calls_limit"] == 200
-        assert data["tier2"]["calls_used"] == 7
-        assert data["tier2"]["calls_limit"] == 30
+        assert data["market_scoring"]["calls_used"] == 42
+        assert data["market_scoring"]["calls_limit"] == 4000
 
     @pytest.mark.asyncio
     async def test_stats_count_matches_feed(self, int_client):
@@ -275,19 +250,13 @@ class TestBudgetAndStats:
         feed_resp = await int_client.get("/api/signals")
         feed = feed_resp.json()
 
-        # Stats count today's signals, feed returns all (no date filter by default)
-        # Both should be non-negative
         assert stats["total_signals_today"] >= 0
         assert len(feed) >= stats["total_signals_today"]
 
     @pytest.mark.asyncio
     async def test_high_suspicion_count_accurate(self, int_client):
-        """High suspicion count should match signals with suspicion ≥ 80."""
+        """High suspicion count should match signals with score ≥ 80."""
         stats = (await int_client.get("/api/signals/stats")).json()
-        feed = (await int_client.get("/api/signals", params={"min_score": 80})).json()
-
-        # The stats endpoint filters by today only, feed doesn't filter by date
-        # So high_suspicion_today ≤ len(feed)
         assert stats["high_suspicion_today"] >= 0
 
 
@@ -307,140 +276,16 @@ class TestHealthIntegration:
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# 5. Scanner → Judge pipeline integration
-# ═══════════════════════════════════════════════════════════════════════════
-
-
-class TestScannerJudgeIntegration:
-    """Verify that signal data produced by the scanner is consumable by the judge."""
-
-    @pytest.mark.asyncio
-    async def test_scanner_signal_flows_to_judge(self):
-        """A signal emitted by the scanner should be processable by the judge."""
-        conn = _full_db()
-
-        # Create a signal similar to what the scanner would produce
-        sig = build_signal(
-            trade_id="trade-flow-001",
-            market_id="mkt-btc",
-            wallet="0xFlowWallet",
-            side="BUY", price=0.8, size_usd=25000.0,
-            trade_timestamp=datetime.now(tz=UTC),
-            z_score=6.0, modified_z_score=6.0,
-            price_impact=0.03,
-            wallet_win_rate=0.82,
-            wallet_total_trades=30,
-            is_whitelisted=True,
-            funding_anomaly=True,
-            funding_age_minutes=10,
-        )
-        write_signal(conn, sig)
-
-        # Set up judge
-        judge_queue: asyncio.Queue[Signal] = asyncio.Queue()
-        alert_queue: asyncio.Queue[Alert] = asyncio.Queue()
-        await judge_queue.put(sig)
-
-        judge = Judge(conn, judge_queue=judge_queue, alert_queue=alert_queue, max_workers=1)
-
-        t1_result = ClassificationResult(
-            classification="INFORMED", confidence=85,
-            one_liner="Suspicious timing with volume spike",
-            model="nova-lite", input_tokens=100, output_tokens=50,
-        )
-        t2_result = ReasoningResult(
-            suspicion_score=92,
-            reasoning="Trade coincides with insider leak. High confidence.",
-            key_evidence="Timing matches leaked board schedule",
-            model="nova-pro", input_tokens=200, output_tokens=80,
-        )
-
-        async def _stop_after_drain():
-            await judge_queue.join()
-            judge.stop()
-
-        stop_task = asyncio.create_task(_stop_after_drain())
-
-        # Mock settings & budget limits to enable tier2 (default is now disabled)
-        with (
-            patch("sentinel.judge.pipeline.fetch_news", new_callable=AsyncMock, return_value=["BTC surges on ETF news"]),
-            patch("sentinel.judge.pipeline.classify", new_callable=AsyncMock, return_value=t1_result),
-            patch("sentinel.judge.pipeline.reason", new_callable=AsyncMock, return_value=t2_result),
-            patch("sentinel.judge.budget._TIER_LIMITS", {"tier1": 5000, "tier2": 30}),
-        ):
-            await asyncio.gather(stop_task, judge.run())
-
-        # Verify the whole chain
-        assert judge.signals_processed == 1
-        assert judge.tier1_calls == 1
-        assert judge.tier2_calls == 1
-        assert judge.alerts_emitted == 1
-
-        # Check DuckDB has the reasoning
-        row = conn.execute(
-            "SELECT suspicion_score, classification, reasoning "
-            "FROM signal_reasoning WHERE signal_id = ?",
-            [sig.signal_id],
-        ).fetchone()
-        assert row is not None
-        assert row[0] == 92
-        assert row[1] == "INFORMED"
-
-        # Check alert was emitted
-        alert = alert_queue.get_nowait()
-        assert alert.score == 92
-        assert alert.classification == "INFORMED"
-
-    @pytest.mark.asyncio
-    async def test_judge_skips_when_budget_exhausted(self):
-        """With exhausted budget, judge should skip without errors."""
-        conn = _full_db()
-        today = datetime.now(tz=UTC).date()
-        # Exhaust tier1 budget (set to match current limit from settings: 5000)
-        conn.execute(
-            "INSERT OR REPLACE INTO llm_budget VALUES (?, 'tier1', 5000, 5000)", [today]
-        )
-
-        sig = build_signal(
-            trade_id="trade-budget-001",
-            market_id="mkt-btc",
-            wallet="0xBudgetTest",
-            side="BUY", price=0.75, size_usd=8000.0,
-            trade_timestamp=datetime.now(tz=UTC),
-            z_score=5.0, modified_z_score=5.0,
-            is_whitelisted=True,
-        )
-
-        judge_queue: asyncio.Queue[Signal] = asyncio.Queue()
-        alert_queue: asyncio.Queue[Alert] = asyncio.Queue()
-        await judge_queue.put(sig)
-
-        judge = Judge(conn, judge_queue=judge_queue, alert_queue=alert_queue, max_workers=1)
-
-        async def _stop_after_drain():
-            await judge_queue.join()
-            judge.stop()
-
-        stop_task = asyncio.create_task(_stop_after_drain())
-        with patch("sentinel.judge.pipeline.fetch_news", new_callable=AsyncMock, return_value=[]):
-            await asyncio.gather(stop_task, judge.run())
-
-        assert judge.skipped_budget == 1
-        assert judge.tier1_calls == 0
-
-
-# ═══════════════════════════════════════════════════════════════════════════
-# 6. Full pipeline → API: write signal + reasoning, then read via API
+# 5. Full pipeline → API: write signal, then read via API
 # ═══════════════════════════════════════════════════════════════════════════
 
 
 class TestFullPipelineToApi:
-    """End-to-end: write a signal + reasoning to DuckDB, then verify the API
-    returns the enriched result with all expected fields populated."""
+    """End-to-end: write a signal to DuckDB, then verify the API returns it."""
 
     @pytest.mark.asyncio
     async def test_full_data_path(self, int_db, int_client):
-        """Write signal + reasoning → read via /api/signals."""
+        """Write signal → read via /api/signals."""
         now = datetime.now(tz=UTC)
         sig = build_signal(
             trade_id="trade-e2e-001",
@@ -458,21 +303,6 @@ class TestFullPipelineToApi:
         )
         write_signal(int_db, sig)
 
-        t1 = ClassificationResult(
-            classification="INFORMED", confidence=88,
-            one_liner="Strong insider signal", model="nova-lite",
-            input_tokens=120, output_tokens=60,
-        )
-        t2 = ReasoningResult(
-            suspicion_score=95,
-            reasoning="Trade placed 2 minutes before material news.",
-            key_evidence="Matches leaked FDA calendar",
-            model="nova-pro",
-            input_tokens=250, output_tokens=100,
-        )
-        store_reasoning(int_db, sig, t1, t2, ["FDA approves drug X", "Stock surges 20%"])
-
-        # Now read via API
         resp = await int_client.get(
             "/api/signals", params={"wallet": "0xE2EWallet"}
         )
@@ -486,18 +316,14 @@ class TestFullPipelineToApi:
         assert result["wallet"] == "0xE2EWallet"
         assert result["side"] == "SELL"
         assert result["statistical_score"] >= 30
-        assert result["classification"] == "INFORMED"
-        assert result["suspicion_score"] == 95
-        assert result["reasoning"] == "Trade placed 2 minutes before material news."
-        assert result["key_evidence"] == "Matches leaked FDA calendar"
-        assert result["tier1_model"] == "nova-lite"
-        assert result["tier2_model"] == "nova-pro"
         assert result["market_question"] == "Will BTC exceed $100k by June?"
         assert result["category"] == "Crypto"
+        # explanation may or may not be set depending on score threshold
+        assert "explanation" in result
 
     @pytest.mark.asyncio
-    async def test_signal_without_reasoning_still_works(self, int_db, int_client):
-        """A signal with no reasoning row should still appear in the feed."""
+    async def test_signal_without_reasoning_works(self, int_db, int_client):
+        """A signal should appear in the feed without any reasoning data."""
         sig = build_signal(
             trade_id="trade-noreas-001",
             market_id="mkt-fed",
@@ -514,8 +340,6 @@ class TestFullPipelineToApi:
         )
         data = resp.json()
         assert len(data) == 1
-        assert data[0]["classification"] is None
-        assert data[0]["reasoning"] is None
         assert data[0]["statistical_score"] >= 30
 
     @pytest.mark.asyncio
@@ -541,21 +365,17 @@ class TestFullPipelineToApi:
         assert profile["total_trades"] > 0
         assert isinstance(profile["categories"], list)
 
-        # Alpha has trades in Crypto (mkt-btc), Science (mkt-resolved)
         cat_names = {c["category"] for c in profile["categories"]}
         assert len(cat_names) >= 1
 
     @pytest.mark.asyncio
     async def test_market_list_ordered_by_signal_activity(self, int_client):
-        """Markets should be ordered by most recent signal activity."""
+        """Markets should be returned with signal counts."""
         resp = await int_client.get("/api/markets")
         assert resp.status_code == 200
         data = resp.json()
         assert len(data) >= 2
-
-        # Markets with signals should appear before those without
         signal_counts = [m["signal_count"] for m in data]
-        # At minimum, some markets should have signals
         assert any(c > 0 for c in signal_counts)
 
     @pytest.mark.asyncio

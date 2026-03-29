@@ -1,4 +1,4 @@
-"""Budget status endpoint — Bedrock LLM usage tracking."""
+"""Budget status endpoint — Bedrock market scoring usage tracking."""
 
 from __future__ import annotations
 
@@ -7,13 +7,14 @@ from datetime import UTC, datetime
 from fastapi import APIRouter
 
 from sentinel.api.deps import get_db
+from sentinel.config import settings
 
 router = APIRouter(tags=["budget"])
 
 
 @router.get("/budget")
 async def get_budget() -> dict:
-    """Current day's Bedrock budget usage for both tiers."""
+    """Current day's Bedrock budget usage for market attractiveness scoring."""
     db = get_db()
     today = datetime.now(tz=UTC).date().isoformat()
 
@@ -22,20 +23,15 @@ async def get_budget() -> dict:
         [today],
     ).fetchall()
 
-    tiers = {}
-    for r in rows:
-        tiers[r[0]] = {"calls_used": r[1], "calls_limit": r[2]}
+    tiers = {r[0]: {"calls_used": r[1], "calls_limit": r[2]} for r in rows}
 
-    # Fill defaults if no rows yet today
-    from sentinel.config import settings
-
-    if "tier1" not in tiers:
-        tiers["tier1"] = {"calls_used": 0, "calls_limit": settings.bedrock_tier1_daily_limit}
-    if "tier2" not in tiers:
-        tiers["tier2"] = {"calls_used": 0, "calls_limit": settings.bedrock_tier2_daily_limit}
+    if "market_scoring" not in tiers:
+        tiers["market_scoring"] = {
+            "calls_used": 0,
+            "calls_limit": settings.bedrock_market_scoring_daily_limit,
+        }
 
     return {
         "date": today,
-        "tier1": tiers["tier1"],
-        "tier2": tiers["tier2"],
+        "market_scoring": tiers["market_scoring"],
     }

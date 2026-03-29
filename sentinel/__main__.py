@@ -61,9 +61,6 @@ async def _run_all(
         mode="DRY RUN" if dry_run else "LIVE",
         with_api=with_api,
         duckdb_path=str(settings.duckdb_path),
-        tier1_model=settings.bedrock_tier1_model,
-        tier1_limit=settings.bedrock_tier1_daily_limit,
-        workers=settings.judge_max_workers,
     )
 
     try:

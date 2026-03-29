@@ -40,12 +40,7 @@ class Settings(BaseSettings):
     # This supports local dev, EC2/ECS IAM roles, and GitHub OIDC in CI.
     aws_region: str = "us-east-1"
     bedrock_tier1_model: str = "amazon.nova-lite-v1:0"
-    bedrock_tier1_daily_limit: int = 5000
-    bedrock_market_scoring_daily_limit: int = 4000  # Separate pool for attractiveness scoring
-    bedrock_tier2_model: str = "amazon.nova-pro-v1:0"
-    bedrock_tier2_daily_limit: int = 0  # Disabled for high-throughput mode
-    bedrock_tier2_min_suspicion: int = 60
-    judge_max_workers: int = 8  # Parallel LLM processing workers
+    bedrock_market_scoring_daily_limit: int = 4000  # Market attractiveness scoring budget
 
     # ── Polygon / Alchemy ───────────────────────────────────────────────────
     polygon_rpc_url: str = "https://polygon-rpc.com"
@@ -53,14 +48,6 @@ class Settings(BaseSettings):
     alchemy_polygon_url: str = ""
     funding_anomaly_threshold_minutes: int = 4320  # 72 hours (tiered decay applied in scorer)
     new_wallet_large_trade_multiplier: float = 5.0  # trade > min_trade_size * this → suspicious
-
-    # ── Tavily / Exa Search ─────────────────────────────────────────────────
-    tavily_api_key: str = ""
-    exa_api_key: str = ""
-    news_search_max_results: int = 5
-    news_search_lookback_days: int = 3
-    news_cache_ttl_hours: int = 12  # Extended cache to reduce API calls
-    news_min_score: int = 70  # Only fetch news for high-scoring signals
 
     # ── Alerts ───────────────────────────────────────────────────────────
     alert_min_score: int = 80

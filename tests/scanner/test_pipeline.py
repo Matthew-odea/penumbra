@@ -9,7 +9,6 @@ import pytest
 
 from sentinel.ingester.models import BookEvent, Trade
 from sentinel.scanner.pipeline import Scanner
-from sentinel.scanner.scorer import Signal
 
 
 def _init_db() -> duckdb.DuckDBPyConnection:
@@ -224,8 +223,7 @@ class TestScannerPipeline:
         )
 
         scanner_queue: asyncio.Queue = asyncio.Queue()
-        judge_queue: asyncio.Queue = asyncio.Queue()
-        scanner = Scanner(conn, scanner_queue=scanner_queue, judge_queue=judge_queue)
+        scanner = Scanner(conn, scanner_queue=scanner_queue)
 
         # Feed the spike trade through the scanner
         spike_trade = Trade(
@@ -252,9 +250,11 @@ class TestScannerPipeline:
         assert scanner.trades_scanned == 1
         # Should have detected the anomaly (high z-score + price impact)
         if scanner.signals_emitted > 0:
-            signal = await judge_queue.get()
-            assert isinstance(signal, Signal)
-            assert signal.statistical_score >= 30
+            row = conn.execute(
+                "SELECT statistical_score FROM signals WHERE trade_id = 'spike-1'"
+            ).fetchone()
+            assert row is not None
+            assert row[0] >= 30
 
     @pytest.mark.asyncio
     async def test_scanner_dry_run(self):

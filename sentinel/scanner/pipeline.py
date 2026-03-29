@@ -2,17 +2,17 @@
 
 The scanner is the second stage of the Penumbra pipeline:
 
-    Ingester → **Scanner** → Judge
+    Ingester → **Scanner** → DuckDB / API
 
 It consumes batches of ``Trade`` / ``BookEvent`` objects from an
 ``asyncio.Queue``, runs them through four detection layers:
 
   1. Volume anomaly (Modified Z-Score)
-  2. Price impact (ΔP / L × V)
+  2. Price impact (deltaP / L x V)
   3. Wallet profiling (win-rate on resolved markets)
   4. Funding anomaly (Alchemy wallet-age check)
 
-…and emits ``Signal`` objects to the Judge queue for any trade scoring ≥
+…and persists ``Signal`` objects to DuckDB for any trade scoring ≥
 ``signal_min_score`` (default 30).
 """
 
@@ -28,7 +28,7 @@ from sentinel.ingester.models import IngesterEvent, Trade
 from sentinel.scanner.funding import check_funding_anomaly
 from sentinel.scanner.kyle_lambda import get_cached_lambda
 from sentinel.scanner.price_impact import get_price_impact
-from sentinel.scanner.scorer import Signal, build_signal, write_signal
+from sentinel.scanner.scorer import build_signal, write_signal
 from sentinel.scanner.volume import (
     get_coordination_signal,
     get_hours_to_resolution,
@@ -52,7 +52,6 @@ class Scanner:
     Args:
         conn: Open DuckDB connection.
         scanner_queue: Queue populated by the ingester's ``BatchWriter``.
-        judge_queue: Optional queue to push scored signals to.
         dry_run: When ``True``, print signals to stdout instead of persisting.
     """
 
@@ -61,12 +60,10 @@ class Scanner:
         conn: Any,
         *,
         scanner_queue: asyncio.Queue[list[IngesterEvent]],
-        judge_queue: asyncio.Queue[Signal] | None = None,
         dry_run: bool = False,
     ) -> None:
         self._conn = conn
         self._scanner_queue = scanner_queue
-        self._judge_queue = judge_queue
         self._dry_run = dry_run
         self._running = True
         self._vpin_tracker = VPINTracker(conn)
@@ -326,6 +323,3 @@ class Scanner:
             except Exception as exc:
                 logger.error("Failed to write signal", signal_id=signal.signal_id, error=str(exc))
 
-        # Forward to Judge queue
-        if self._judge_queue is not None:
-            await self._judge_queue.put(signal)

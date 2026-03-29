@@ -32,8 +32,7 @@ async def test_list_signals_filter_by_min_score(client):
     assert resp.status_code == 200
     data = resp.json()
     for sig in data:
-        effective_score = sig["suspicion_score"] or sig["statistical_score"]
-        assert effective_score >= 80
+        assert sig["statistical_score"] >= 80
 
 
 @pytest.mark.asyncio

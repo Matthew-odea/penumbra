@@ -26,9 +26,6 @@ dependencies = [
     "fastapi>=0.115.0",
     "uvicorn[standard]>=0.32.0",
     
-    # Search
-    "tavily-python>=0.5.0",
-    
     # Config & Utils
     "pydantic>=2.0",
     "pydantic-settings>=2.0",
@@ -106,6 +103,5 @@ check_untyped_defs = true
 module = [
     "py_clob_client.*",
     "duckdb.*",
-    "tavily.*",
 ]
 ignore_missing_imports = true

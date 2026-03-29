@@ -8,6 +8,7 @@ interface Props {
 }
 
 export default function SummaryCards({ stats, budget }: Props) {
+  const ms = budget?.market_scoring
   const cards = [
     {
       label: 'Signals Today',
@@ -26,21 +27,15 @@ export default function SummaryCards({ stats, budget }: Props) {
       sub: null,
     },
     {
-      label: 'Budget T1',
-      value: budget ? `${budget.tier1.calls_used}/${budget.tier1.calls_limit}` : '—',
-      sub: budget ? `${Math.round((budget.tier1.calls_used / budget.tier1.calls_limit) * 100)}% used` : null,
-      warn: budget ? budget.tier1.calls_used / budget.tier1.calls_limit > 0.8 : false,
-    },
-    {
-      label: 'Budget T2',
-      value: budget ? `${budget.tier2.calls_used}/${budget.tier2.calls_limit}` : '—',
-      sub: budget ? `${Math.round((budget.tier2.calls_used / budget.tier2.calls_limit) * 100)}% used` : null,
-      warn: budget ? budget.tier2.calls_used / budget.tier2.calls_limit > 0.8 : false,
+      label: 'Scoring Budget',
+      value: ms ? `${ms.calls_used}/${ms.calls_limit}` : '—',
+      sub: ms ? `${Math.round((ms.calls_used / ms.calls_limit) * 100)}% used` : null,
+      warn: ms ? ms.calls_used / ms.calls_limit > 0.8 : false,
     },
   ]
 
   return (
-    <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
+    <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
       {cards.map((c) => (
         <div
           key={c.label}

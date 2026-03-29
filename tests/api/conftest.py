@@ -112,14 +112,10 @@ def _seed(conn: duckdb.DuckDBPyConnection) -> None:
             [sid, tid, classification, 60 + i * 5, min(suspicion, 100), i >= 3, now],
         )
 
-    # LLM Budget — today's usage
+    # LLM Budget — today's usage (market attractiveness scoring only)
     today = now.date()
     conn.execute(
-        "INSERT INTO llm_budget VALUES (?, 'tier1', 42, 200)",
-        [today],
-    )
-    conn.execute(
-        "INSERT INTO llm_budget VALUES (?, 'tier2', 7, 30)",
+        "INSERT INTO llm_budget VALUES (?, 'market_scoring', 42, 4000)",
         [today],
     )
 

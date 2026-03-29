@@ -15,11 +15,10 @@ async def test_timeseries_returns_list(client):
     assert len(data) > 0
 
     # Each point should have all expected keys
-    keys = {"bucket", "trades", "signals", "llm_t1", "llm_t2", "alerts"}
+    keys = {"bucket", "trades", "signals", "alerts"}
     for point in data:
         assert keys.issubset(point.keys()), f"Missing keys in {point}"
-        # Counts should be non-negative integers
-        for k in ("trades", "signals", "llm_t1", "llm_t2", "alerts"):
+        for k in ("trades", "signals", "alerts"):
             assert isinstance(point[k], int) and point[k] >= 0
 
 
@@ -62,41 +61,31 @@ async def test_overview_structure(client):
     assert resp.status_code == 200
     data = resp.json()
 
-    # Top-level keys
     assert "funnel" in data
-    assert "classification" in data
     assert "score_distribution" in data
     assert "top_markets" in data
+    assert "top_traded_markets" in data
+    assert "market_coverage" in data
+    # No more classification/tier2 fields
+    assert "classification" not in data
+    assert "tier2_coverage" not in data
 
 
 @pytest.mark.anyio
 async def test_overview_funnel(client):
-    """Funnel counts should be monotonically decreasing."""
+    """Funnel counts should be present and non-negative."""
     resp = await client.get("/api/metrics/overview")
     data = resp.json()
     funnel = data["funnel"]
 
     assert "trades" in funnel
     assert "signals" in funnel
-    assert "classified" in funnel
     assert "high_suspicion" in funnel
+    # No longer has 'classified'
+    assert "classified" not in funnel
 
-    # Monotonically decreasing: trades ≥ signals ≥ classified ≥ high_suspicion
     assert funnel["trades"] >= funnel["signals"]
-    assert funnel["signals"] >= funnel["classified"]
-    assert funnel["classified"] >= funnel["high_suspicion"]
-
-
-@pytest.mark.anyio
-async def test_overview_classification(client):
-    """Classification should contain INFORMED and NOISE counts from seeded data."""
-    resp = await client.get("/api/metrics/overview")
-    data = resp.json()
-    classification = data["classification"]
-
-    # Seeded data has 3 NOISE (i=0,1,2) and 3 INFORMED (i=3,4,5)
-    assert classification.get("NOISE", 0) > 0
-    assert classification.get("INFORMED", 0) > 0
+    assert funnel["signals"] >= funnel["high_suspicion"]
 
 
 @pytest.mark.anyio
@@ -121,13 +110,11 @@ async def test_overview_top_markets(client):
     assert isinstance(top, list)
     assert len(top) > 0
 
-    # Check structure
     for m in top:
         assert "market_id" in m
         assert "signal_count" in m
         assert m["signal_count"] > 0
 
-    # mkt-001 should be the top market (5 signals vs mkt-002's 3)
     market_ids = [m["market_id"] for m in top]
     assert "mkt-001" in market_ids
 
@@ -139,15 +126,8 @@ async def test_overview_funnel_values(client):
     data = resp.json()
     funnel = data["funnel"]
 
-    # Seeded: 26 trades total (20 regular + 6 resolved)
-    # But only today's count — trades are spread from -6h to now, so most are today
     assert funnel["trades"] > 0
-
-    # 8 signals seeded
     assert funnel["signals"] > 0
-
-    # 6 signal_reasoning records (classified)
-    assert funnel["classified"] > 0
 
 
 @pytest.mark.anyio
@@ -177,9 +157,7 @@ async def test_ingestion_totals_match_trades(client):
 
     # Seeded trades: 20 regular + 6 resolved = 26 total
     assert data["totals"]["all_time"] == 26
-    # At least the recent trades should be today (resolved ones are 5 days old)
     assert data["totals"]["today"] >= 0
-    # Wallets active today should be non-negative
     assert data["wallets_active_today"] >= 0
     assert data["markets_active_today"] >= 0
 

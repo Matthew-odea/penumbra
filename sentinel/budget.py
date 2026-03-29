@@ -1,8 +1,8 @@
 """Budget manager for LLM call tracking.
 
-Enforces daily call limits for Bedrock Tier 1 (Llama 3) and Tier 2 (Claude)
-to keep costs predictable. Tracks usage in the DuckDB ``llm_budget`` table
-and resets at midnight UTC.
+Enforces daily call limits for Bedrock API usage (market attractiveness
+scoring) to keep costs predictable.  Tracks usage in the DuckDB
+``llm_budget`` table and resets at midnight UTC.
 """
 
 from __future__ import annotations
@@ -18,8 +18,6 @@ from sentinel.config import settings
 logger = structlog.get_logger()
 
 _TIER_LIMITS: dict[str, int] = {
-    "tier1": settings.bedrock_tier1_daily_limit,
-    "tier2": settings.bedrock_tier2_daily_limit,
     "market_scoring": settings.bedrock_market_scoring_daily_limit,
 }
 
@@ -81,14 +79,10 @@ class BudgetManager:
         """Atomically check budget and increment if available.
 
         Returns True if a budget slot was consumed, False if exhausted.
-        Uses a SQL UPDATE ... WHERE calls_used < calls_limit RETURNING to
-        eliminate the TOCTOU race between can_call() and record_call() when
-        multiple workers run concurrently.
         """
         today = self._today()
         limit = _TIER_LIMITS.get(tier, 0)
 
-        # Ensure the row exists for today (idempotent)
         self.db.execute(
             """
             INSERT INTO llm_budget (date, tier, calls_used, calls_limit)
@@ -98,7 +92,6 @@ class BudgetManager:
             [today, tier, limit],
         )
 
-        # Atomic check-and-increment: only updates if under limit
         row = self.db.execute(
             """
             UPDATE llm_budget

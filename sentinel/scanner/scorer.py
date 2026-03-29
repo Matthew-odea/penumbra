@@ -276,6 +276,63 @@ def compute_statistical_score(
     return score
 
 
+# ── Explanation generation ─────────────────────────────────────────────────
+
+
+def generate_explanation(signal: Signal, *, threshold: int = 80) -> str | None:
+    """Build a template-based natural language explanation for high-scoring signals.
+
+    Returns ``None`` if the signal's score is below *threshold*.
+    """
+    if signal.statistical_score < threshold:
+        return None
+
+    parts: list[str] = []
+
+    if signal.modified_z_score > 3.5:
+        parts.append(f"volume spike ({signal.modified_z_score:.1f}x normal)")
+
+    if signal.funding_anomaly and signal.funding_age_minutes is not None:
+        if signal.funding_age_minutes < 60:
+            parts.append(f"new wallet (funded {signal.funding_age_minutes}min ago)")
+        else:
+            hours = signal.funding_age_minutes // 60
+            parts.append(f"new wallet (funded {hours}h ago)")
+
+    parts.append(f"${signal.size_usd:,.0f} {signal.side.lower()}")
+
+    if signal.market_concentration >= 0.8:
+        parts.append(f"{signal.market_concentration:.0%} concentration on this market")
+    elif signal.market_concentration >= 0.5:
+        parts.append(f"{signal.market_concentration:.0%} market concentration")
+
+    if signal.hours_to_resolution is not None and signal.hours_to_resolution < 72:
+        parts.append(f"{signal.hours_to_resolution}h to resolution")
+
+    if signal.is_whitelisted:
+        parts.append("known profitable wallet")
+    elif signal.wallet_win_rate is not None and signal.wallet_win_rate > 0.65:
+        parts.append(f"{signal.wallet_win_rate:.0%} historical win rate")
+
+    if signal.ofi_score is not None and abs(signal.ofi_score) >= 0.4:
+        flow_dir = "buying" if signal.ofi_score > 0 else "selling"
+        trade_is_buy = signal.side.upper() == "BUY"
+        flow_is_buy = signal.ofi_score > 0
+        if flow_is_buy != trade_is_buy:
+            parts.append(f"contrarian trade against {flow_dir} pressure")
+
+    if signal.coordination_wallet_count >= 3:
+        parts.append(f"{signal.coordination_wallet_count} wallets coordinating")
+
+    if signal.liquidity_cliff:
+        parts.append("liquidity cliff detected")
+
+    if signal.position_trade_count >= 3:
+        parts.append(f"accumulating ({signal.position_trade_count} trades same side)")
+
+    return f"High suspicion: {', '.join(parts)}" if parts else None
+
+
 # ── Signal construction ─────────────────────────────────────────────────────
 
 

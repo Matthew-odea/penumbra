@@ -14,12 +14,8 @@ class TestSettings:
         )
         assert s.duckdb_path.name == "sentinel.duckdb"
         assert s.zscore_threshold == 2.0
-        assert s.bedrock_tier1_daily_limit == 5000  # High-throughput mode
-        assert s.bedrock_tier2_daily_limit == 0  # Disabled by default
-        assert s.judge_max_workers == 8  # Parallel processing
+        assert s.bedrock_market_scoring_daily_limit == 4000
         assert s.alert_min_score == 80
-        assert s.news_cache_ttl_hours == 12  # Extended cache
-        assert s.news_min_score == 70  # Only fetch for high-scoring signals
         assert s.hot_market_count == 50
         assert s.hot_market_min_score == 60
 

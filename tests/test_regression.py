@@ -6,18 +6,13 @@ that changes to one layer don't silently break another.
 
 from __future__ import annotations
 
-import json
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from uuid import uuid4
 
 import duckdb
-import pytest
 
 from sentinel.db.init import SCHEMA_SQL
-from sentinel.judge.classifier import ClassificationResult
-from sentinel.judge.reasoner import ReasoningResult
-from sentinel.judge.store import build_alert, store_reasoning
 from sentinel.scanner.scorer import (
     Signal,
     build_signal,
@@ -139,23 +134,9 @@ class TestSchemaRegression:
             "modified_z_score", "price_impact", "wallet_win_rate",
             "wallet_total_trades", "is_whitelisted", "funding_anomaly",
             "funding_age_minutes", "statistical_score", "created_at",
-        }
-        assert expected.issubset(cols), f"Missing columns: {expected - cols}"
-
-    def test_signal_reasoning_columns(self):
-        conn = _fresh_db()
-        cols = {
-            r[0]
-            for r in conn.execute(
-                "SELECT column_name FROM information_schema.columns "
-                "WHERE table_name='signal_reasoning'"
-            ).fetchall()
-        }
-        expected = {
-            "signal_id", "trade_id", "classification", "tier1_confidence",
-            "suspicion_score", "reasoning", "key_evidence", "news_headlines",
-            "tier1_model", "tier2_model", "tier1_tokens", "tier2_tokens",
-            "created_at",
+            "ofi_score", "hours_to_resolution", "market_concentration",
+            "coordination_wallet_count", "liquidity_cliff", "scoring_version",
+            "position_trade_count", "vpin_percentile", "lambda_value",
         }
         assert expected.issubset(cols), f"Missing columns: {expected - cols}"
 
@@ -322,120 +303,7 @@ class TestSignalPersistence:
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# 4. Reasoning store round-trip
-# ═══════════════════════════════════════════════════════════════════════════
-
-
-class TestReasoningPersistence:
-    """Verify the judge's store_reasoning writes valid rows."""
-
-    def test_tier1_only_round_trip(self):
-        conn = _fresh_db()
-        sig = _make_signal(signal_id="sig-reason-001")
-        t1 = ClassificationResult(
-            classification="INFORMED", confidence=70,
-            one_liner="Suspicious timing", model="nova-lite",
-            input_tokens=100, output_tokens=50,
-        )
-        store_reasoning(conn, sig, t1, None, ["headline-1", "headline-2"])
-
-        row = conn.execute(
-            "SELECT classification, tier1_confidence, suspicion_score, "
-            "reasoning, tier2_model, news_headlines "
-            "FROM signal_reasoning WHERE signal_id = ?",
-            ["sig-reason-001"],
-        ).fetchone()
-        assert row is not None
-        assert row[0] == "INFORMED"
-        assert row[1] == 70
-        assert row[2] == 70  # No T2 → suspicion = T1 confidence
-        assert row[3] == "Suspicious timing"
-        assert row[4] is None  # No T2 model
-        headlines = json.loads(row[5])
-        assert len(headlines) == 2
-
-    def test_tier2_overrides_suspicion(self):
-        conn = _fresh_db()
-        sig = _make_signal(signal_id="sig-reason-002")
-        t1 = ClassificationResult(
-            classification="INFORMED", confidence=75,
-            one_liner="Suspicious", model="nova-lite",
-            input_tokens=100, output_tokens=50,
-        )
-        t2 = ReasoningResult(
-            suspicion_score=92, reasoning="Very high confidence after deep analysis.",
-            key_evidence="Timing matches insider calendar", model="nova-pro",
-            input_tokens=200, output_tokens=80,
-        )
-        store_reasoning(conn, sig, t1, t2, ["headline"])
-
-        row = conn.execute(
-            "SELECT suspicion_score, reasoning, tier2_model "
-            "FROM signal_reasoning WHERE signal_id = ?",
-            ["sig-reason-002"],
-        ).fetchone()
-        assert row[0] == 92
-        assert row[1] == "Very high confidence after deep analysis."
-        assert row[2] == "nova-pro"
-
-
-# ═══════════════════════════════════════════════════════════════════════════
-# 5. Alert threshold regression
-# ═══════════════════════════════════════════════════════════════════════════
-
-
-class TestAlertThreshold:
-    """Ensure the alert boundary (score ≥ 80) is enforced correctly."""
-
-    @pytest.mark.parametrize("confidence,expect_alert", [
-        (79, False), (80, True), (81, True), (100, True), (0, False),
-    ])
-    def test_boundary_tier1_only(self, confidence: int, expect_alert: bool):
-        sig = _make_signal()
-        t1 = ClassificationResult(
-            classification="INFORMED", confidence=confidence,
-            one_liner="Test", model="nova-lite",
-            input_tokens=0, output_tokens=0,
-        )
-        alert = build_alert(sig, t1, None)
-        assert (alert is not None) == expect_alert
-
-    def test_tier2_score_overrides_tier1_for_alert(self):
-        """T1=85 (would trigger) but T2=50 (should suppress)."""
-        sig = _make_signal()
-        t1 = ClassificationResult(
-            classification="INFORMED", confidence=85,
-            one_liner="Suspicious", model="nova-lite",
-            input_tokens=0, output_tokens=0,
-        )
-        t2 = ReasoningResult(
-            suspicion_score=50, reasoning="On review, normal.",
-            key_evidence="None", model="nova-pro",
-            input_tokens=0, output_tokens=0,
-        )
-        alert = build_alert(sig, t1, t2)
-        assert alert is None  # T2=50 < 80
-
-    def test_tier2_high_creates_alert(self):
-        """T1=60 (wouldn't trigger) but T2=90 (should trigger)."""
-        sig = _make_signal()
-        t1 = ClassificationResult(
-            classification="INFORMED", confidence=60,
-            one_liner="Maybe", model="nova-lite",
-            input_tokens=0, output_tokens=0,
-        )
-        t2 = ReasoningResult(
-            suspicion_score=90, reasoning="Definitely informed.",
-            key_evidence="Timing", model="nova-pro",
-            input_tokens=0, output_tokens=0,
-        )
-        alert = build_alert(sig, t1, t2)
-        assert alert is not None
-        assert alert.score == 90
-
-
-# ═══════════════════════════════════════════════════════════════════════════
-# 6. View regression — v_hourly_volume and v_wallet_performance
+# 4. View regression — v_hourly_volume and v_wallet_performance
 # ═══════════════════════════════════════════════════════════════════════════
 
 
@@ -497,7 +365,7 @@ class TestViewRegression:
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# 7. Data-type coercion regression (JSON serialisation)
+# 5. Data-type coercion regression (JSON serialisation)
 # ═══════════════════════════════════════════════════════════════════════════
 
 
@@ -510,22 +378,3 @@ class TestCoercionRegression:
         for k, v in d.items():
             if isinstance(v, float):
                 assert not isinstance(v, Decimal), f"{k} is Decimal, expected float"
-
-    def test_reasoning_headlines_round_trip(self):
-        """Headlines stored as JSON string should parse back to a list."""
-        conn = _fresh_db()
-        sig = _make_signal(signal_id="sig-json-001")
-        t1 = ClassificationResult(
-            classification="NOISE", confidence=20,
-            one_liner="Normal", model="nova-lite",
-            input_tokens=50, output_tokens=30,
-        )
-        headlines = ["Market crashes 10%", "CEO resigns unexpectedly"]
-        store_reasoning(conn, sig, t1, None, headlines)
-
-        raw = conn.execute(
-            "SELECT news_headlines FROM signal_reasoning WHERE signal_id = ?",
-            ["sig-json-001"],
-        ).fetchone()[0]
-        parsed = json.loads(raw)
-        assert parsed == headlines
