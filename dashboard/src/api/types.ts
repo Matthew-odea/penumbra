@@ -77,23 +77,6 @@ export interface MarketDetail {
   tier: 'hot' | 'scored' | 'unscored'
 }
 
-export interface WatchlistMarket {
-  market_id: string
-  question: string
-  category: string | null
-  volume_usd: number | null
-  liquidity_usd: number | null
-  active: boolean
-  resolved: boolean
-  end_date: string | null
-  last_price: number | null
-  attractiveness_score: number
-  attractiveness_reason: string | null
-  hours_to_resolution: number | null
-  priority_score: number
-  signals_today: number
-}
-
 export interface VolumePoint {
   hour: string
   trade_count: number

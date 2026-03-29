@@ -25,17 +25,16 @@ export default function Layout() {
           {/* Nav */}
           <nav className="flex items-center gap-1">
             <NavItem to="/" label="Signals" active={location.pathname === '/'} />
-            <NavItem to="/watchlist" label="Watchlist" active={location.pathname === '/watchlist'} />
             <NavItem to="/markets" label="Markets" active={location.pathname === '/markets'} />
             <NavItem to="/wallets" label="Wallets" active={location.pathname === '/wallets'} />
             <NavItem to="/metrics" label="Metrics" active={location.pathname === '/metrics'} />
           </nav>
         </div>
 
-        {/* Right: T1 budget + status */}
+        {/* Right: scoring budget + status */}
         <div className="flex items-center gap-4 text-xs">
           <div className="flex items-center gap-3 font-mono text-neutral-500">
-            <span>T1 {t1Used}/{t1Limit}</span>
+            <span>Scoring {t1Used}/{t1Limit}</span>
           </div>
 
           <div className="flex items-center gap-1.5">

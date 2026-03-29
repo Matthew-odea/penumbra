@@ -9,7 +9,6 @@ import {
   fetchMarketVolume,
   fetchMarketSignals,
   fetchMarketAnomalies,
-  fetchWatchlist,
   fetchWallets,
   fetchWalletProfile,
   fetchWalletTrades,
@@ -40,14 +39,6 @@ export function useSignalStats() {
     queryKey: ['signal-stats'],
     queryFn: fetchSignalStats,
     refetchInterval: POLL,
-  })
-}
-
-export function useWatchlist() {
-  return useQuery({
-    queryKey: ['watchlist'],
-    queryFn: fetchWatchlist,
-    refetchInterval: 30_000, // 30s — hot tier refreshes every 30 min
   })
 }
 

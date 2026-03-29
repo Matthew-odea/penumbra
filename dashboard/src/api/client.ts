@@ -5,7 +5,6 @@ import type {
   SignalStats,
   Market,
   MarketDetail,
-  WatchlistMarket,
   VolumePoint,
   AnomalyPoint,
   WalletProfile,
@@ -65,10 +64,6 @@ export function fetchMarkets(opts?: {
   sort?: 'signals' | 'priority' | 'liquidity' | 'resolution'
 }): Promise<Market[]> {
   return get<Market[]>(`${BASE}/markets`, opts)
-}
-
-export function fetchWatchlist(): Promise<WatchlistMarket[]> {
-  return get<WatchlistMarket[]>(`${BASE}/watchlist`)
 }
 
 export function fetchMarketDetail(marketId: string): Promise<MarketDetail> {
