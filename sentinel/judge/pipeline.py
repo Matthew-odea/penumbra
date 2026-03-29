@@ -215,7 +215,12 @@ class Judge:
             self.signals_processed += 1
 
     def _lookup_market(self, market_id: str) -> tuple[str, str, float]:
-        """Fetch market metadata from DuckDB. Returns (question, category, liquidity)."""
+        """Fetch market metadata from DuckDB. Returns (question, category, liquidity).
+
+        When Polymarket returns null liquidity (stored as 0.0), falls back to
+        ``settings.price_impact_fallback_liquidity_usd`` so the LLM sees a
+        reasonable estimate rather than $0 for every market.
+        """
         if not self.db:
             return ("", "", 0.0)
 
@@ -225,7 +230,10 @@ class Judge:
                 [market_id],
             ).fetchone()
             if row:
-                return (row[0] or "", row[1] or "", float(row[2] or 0))
+                liquidity = float(row[2] or 0)
+                if liquidity <= 0:
+                    liquidity = settings.price_impact_fallback_liquidity_usd
+                return (row[0] or "", row[1] or "", liquidity)
         except Exception as exc:
             logger.warning("Market lookup failed", market_id=market_id, error=str(exc))
 

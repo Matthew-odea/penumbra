@@ -45,6 +45,24 @@ def _init_db() -> duckdb.DuckDBPyConnection:
             ingested_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     """)
+    conn.execute("""
+        CREATE OR REPLACE VIEW v_deduped_trades AS
+        WITH ranked AS (
+            SELECT *,
+                ROW_NUMBER() OVER (
+                    PARTITION BY market_id, side,
+                        date_trunc('second', timestamp),
+                        ROUND(size_usd::DOUBLE, 2)
+                    ORDER BY
+                        CASE WHEN source = 'rest' THEN 0 ELSE 1 END,
+                        ingested_at DESC
+                ) AS rn
+            FROM trades
+        )
+        SELECT trade_id, market_id, asset_id, wallet, side,
+               price, size_usd, timestamp, tx_hash, source, ingested_at
+        FROM ranked WHERE rn = 1
+    """)
     return conn
 
 

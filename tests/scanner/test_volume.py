@@ -47,6 +47,25 @@ def _init_db() -> duckdb.DuckDBPyConnection:
             ingested_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     """)
+    # Dedup view — prefers REST trades over WS duplicates
+    conn.execute("""
+        CREATE OR REPLACE VIEW v_deduped_trades AS
+        WITH ranked AS (
+            SELECT *,
+                ROW_NUMBER() OVER (
+                    PARTITION BY market_id, side,
+                        date_trunc('second', timestamp),
+                        ROUND(size_usd::DOUBLE, 2)
+                    ORDER BY
+                        CASE WHEN source = 'rest' THEN 0 ELSE 1 END,
+                        ingested_at DESC
+                ) AS rn
+            FROM trades
+        )
+        SELECT trade_id, market_id, asset_id, wallet, side,
+               price, size_usd, timestamp, tx_hash, source, ingested_at
+        FROM ranked WHERE rn = 1
+    """)
     # Views from init.py
     conn.execute("""
         CREATE OR REPLACE VIEW v_hourly_volume AS
@@ -56,7 +75,7 @@ def _init_db() -> duckdb.DuckDBPyConnection:
             COUNT(*) AS trade_count,
             SUM(size_usd) AS volume_usd,
             COUNT(DISTINCT wallet) AS unique_wallets
-        FROM trades
+        FROM v_deduped_trades
         WHERE timestamp >= CURRENT_TIMESTAMP - INTERVAL '7 days'
         GROUP BY 1, 2
     """)
@@ -94,7 +113,7 @@ def _init_db() -> duckdb.DuckDBPyConnection:
             CASE
                 WHEN mm.mad_vol > 0
                 THEN 0.6745 * (h.volume_usd - ms.median_vol) / mm.mad_vol
-                ELSE 0
+                ELSE NULL
             END AS modified_z_score
         FROM hourly h
         JOIN market_stats ms ON h.market_id = ms.market_id
@@ -131,22 +150,29 @@ class TestVolumeAnomaly:
         result = get_anomalies(conn, threshold=0)
         assert result == []
 
-    def test_single_market_single_hour_zscore_zero(self):
-        """One hour bucket → MAD = 0 → Z-score must be 0."""
+    def test_single_market_single_hour_zscore_null(self):
+        """One hour bucket → MAD = 0 → Z-score is NULL (unknown, not normal).
+
+        With NULL z-scores, get_anomalies (which filters modified_z_score >= threshold)
+        correctly excludes these rows — NULL is not >= anything.
+        """
         conn = _init_db()
         _insert_trade(conn, trade_id="t1", size_usd=1000.0, hours_ago=0.5)
         result = get_anomalies(conn, threshold=0)
-        assert len(result) == 1
-        assert result[0].modified_z_score == 0.0
+        assert len(result) == 0  # NULL z-score excluded from anomaly results
 
-    def test_uniform_hours_zscore_zero(self):
-        """Multiple hours with identical volume → MAD = 0 → Z-score = 0."""
+        # But get_zscore_for_market still returns 0.0 as a safe default
+        z = get_zscore_for_market(conn, "mkt-1")
+        assert z == 0.0
+
+    def test_uniform_hours_zscore_null(self):
+        """Multiple hours with identical volume → MAD = 0 → Z-score is NULL."""
         conn = _init_db()
         for i in range(5):
             _insert_trade(conn, trade_id=f"t{i}", size_usd=500.0, hours_ago=i + 0.5)
         result = get_anomalies(conn, threshold=0)
-        for a in result:
-            assert a.modified_z_score == 0.0
+        # All buckets have identical volume → MAD=0 → NULL z-scores → none returned
+        assert len(result) == 0
 
     def test_spike_produces_high_zscore(self):
         """One abnormally large hour should produce a high Z-score."""

@@ -59,6 +59,9 @@ class TestSchemaInit:
         conn = init_schema(db_path)
 
         # Views should return empty results, not error
+        result = conn.execute("SELECT * FROM v_deduped_trades").fetchall()
+        assert result == []
+
         result = conn.execute("SELECT * FROM v_hourly_volume").fetchall()
         assert result == []
 
@@ -66,6 +69,9 @@ class TestSchemaInit:
         assert result == []
 
         result = conn.execute("SELECT * FROM v_wallet_performance").fetchall()
+        assert result == []
+
+        result = conn.execute("SELECT * FROM v_signal_outcomes").fetchall()
         assert result == []
         conn.close()
 

@@ -37,8 +37,8 @@ BookEventCallback = Callable[[BookEvent], Coroutine[Any, Any, None]]
 
 # Reconnection parameters
 _INITIAL_BACKOFF = 1.0  # seconds
-_MAX_BACKOFF = 60.0
-_MAX_RETRIES = 50  # effectively unlimited with backoff
+_MAX_BACKOFF = 15.0     # reduced from 60s — longer gaps lose more trades
+_MAX_RETRIES = 50       # effectively unlimited with backoff
 
 # Lenient SSL context — Polymarket CDN cert can mismatch behind VPN/geo-fence
 _SSL_CTX = ssl.create_default_context()
@@ -64,18 +64,21 @@ class Listener:
         *,
         on_trade: TradeCallback,
         on_book_event: BookEventCallback | None = None,
+        on_reconnect: Callable[[], Coroutine[Any, Any, None]] | None = None,
         asset_ids: list[str] | None = None,
         ws_url: str | None = None,
         dry_run: bool = False,
     ) -> None:
         self._on_trade = on_trade
         self._on_book_event = on_book_event
+        self._on_reconnect = on_reconnect
         self._asset_ids = list(asset_ids or [])
         self._ws_url = ws_url or settings.polymarket_ws_url
         self._dry_run = dry_run
         self._trade_count = 0
         self._book_event_count = 0
         self._book_message_count = 0
+        self._reconnect_count = 0
         self._running = False
         self._ws: ClientConnection | None = None  # active connection, None between reconnects
 
@@ -97,14 +100,29 @@ class Listener:
                 break
             except Exception as exc:
                 retries += 1
+                self._reconnect_count += 1
                 logger.warning(
                     "WS disconnected — reconnecting",
                     error=str(exc),
                     retry=retries,
                     backoff_s=backoff,
+                    total_reconnects=self._reconnect_count,
                 )
                 await asyncio.sleep(backoff)
                 backoff = min(backoff * 2, _MAX_BACKOFF)
+
+                # After reconnect, fire callback so the poller can backfill
+                # any trades missed during the gap.
+                if self._on_reconnect is not None:
+                    try:
+                        await self._on_reconnect()
+                    except Exception as cb_exc:
+                        logger.warning("on_reconnect callback failed", error=str(cb_exc))
+
+                # Reset backoff on successful reconnection (next iteration
+                # will call _connect_and_listen — if it succeeds, great;
+                # if it fails immediately, backoff restarts from 1s).
+                backoff = _INITIAL_BACKOFF
 
         if retries >= _MAX_RETRIES:
             logger.error("Max WS retries exceeded — giving up")
@@ -126,6 +144,11 @@ class Listener:
     def book_message_count(self) -> int:
         """WS messages containing price_changes (one message may have many entries)."""
         return self._book_message_count
+
+    @property
+    def reconnect_count(self) -> int:
+        """Total number of WS reconnections since startup."""
+        return self._reconnect_count
 
     async def update_subscriptions(self, new_asset_ids: list[str]) -> None:
         """Subscribe to additional asset_ids on the live WS connection.
@@ -254,15 +277,28 @@ class Listener:
         if "bids" in msg or "asks" in msg:
             return
 
-        # ── 4. Order placement/update (fee_rate_bps present) — skip ────
-        # These are order-level notifications, not trade executions.
-        # Shape: {market, asset_id, price, size, fee_rate_bps, ...}
+        # ── 4. Order placement/update — skip with logging ──────────────
+        # Messages with fee_rate_bps but no event_type are order-level
+        # notifications (placements/cancellations), not trade executions.
+        # We log the first few so new Polymarket message types are visible.
         if "fee_rate_bps" in msg:
+            self._fee_rate_skip_count = getattr(self, "_fee_rate_skip_count", 0) + 1
+            if self._fee_rate_skip_count <= 5:
+                logger.debug(
+                    "Skipping order-level fee_rate_bps message",
+                    keys=sorted(msg.keys()),
+                    event_type=msg.get("event_type"),
+                )
+            elif self._fee_rate_skip_count % 1000 == 0:
+                logger.info(
+                    "fee_rate_bps messages skipped",
+                    total=self._fee_rate_skip_count,
+                )
             return
 
         # ── 5. Unknown ─────────────────────────────────────────────────
         self._unknown_count = getattr(self, "_unknown_count", 0) + 1
         if self._unknown_count <= 10:
-            logger.warning("Unhandled WS message (sample)", payload=msg)
+            logger.warning("Unhandled WS message (sample)", keys=sorted(msg.keys())[:8])
         elif self._unknown_count % 500 == 0:
-            logger.debug("Unhandled WS message", keys=list(msg.keys())[:5], total_unknown=self._unknown_count)
+            logger.info("Unhandled WS messages", total_unknown=self._unknown_count)

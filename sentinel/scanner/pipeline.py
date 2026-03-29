@@ -34,10 +34,11 @@ from sentinel.scanner.volume import (
     get_liquidity_cliff,
     get_market_concentration,
     get_ofi_for_market,
+    get_trade_size_percentile,
     get_zscore_5m_for_market,
     get_zscore_for_market,
 )
-from sentinel.scanner.wallet_profiler import get_wallet_profile
+from sentinel.scanner.wallet_profiler import get_resolved_trade_count, get_wallet_profile
 
 logger = structlog.get_logger()
 
@@ -127,6 +128,18 @@ class Scanner:
             z_score = max(z_hourly, z_5m)
         except Exception as exc:
             logger.debug("Z-score lookup failed", market=trade.market_id, error=str(exc))
+        # Modulate Z-score by trade size: large trades get a higher share
+        # of the market-level Z, small trades get dampened.
+        # Maps size percentile [0, 1] to multiplier [0.5, 1.5].
+        if z_score > 0:
+            try:
+                size_pctile = get_trade_size_percentile(
+                    self._conn, trade.market_id, float(trade.size_usd),
+                )
+                z_score *= 0.5 + size_pctile
+            except Exception as exc:
+                logger.debug("Size percentile lookup failed", market=trade.market_id, error=str(exc))
+
         try:
             ofi_score = get_ofi_for_market(self._conn, trade.market_id)
         except Exception as exc:
@@ -143,7 +156,7 @@ class Scanner:
 
         # 3. Wallet profiling
         wallet_win_rate: float | None = None
-        wallet_total_trades: int | None = None
+        wallet_total_trades: int | None = None  # None = truly unknown (0 resolved trades)
         is_whitelisted = False
         try:
             profile = get_wallet_profile(self._conn, trade.wallet)
@@ -151,6 +164,14 @@ class Scanner:
                 wallet_win_rate = profile.win_rate
                 wallet_total_trades = profile.total_resolved_trades
                 is_whitelisted = profile.is_whitelisted
+            elif _wallet_known:
+                # Profile is None (< 5 resolved trades). Distinguish "truly new"
+                # (0 resolved) from "has some history" (1-4 resolved) so the
+                # scorer doesn't award the zero-history bonus to wallets that
+                # have traded before but just below the profiling threshold.
+                raw_count = get_resolved_trade_count(self._conn, trade.wallet)
+                if raw_count > 0:
+                    wallet_total_trades = raw_count  # non-None → no zero-history bonus
         except Exception as exc:
             logger.debug("Wallet profile lookup failed", wallet=trade.wallet[:10], error=str(exc))
 
@@ -200,7 +221,7 @@ class Scanner:
         # 7. Coordination detection (≥3 distinct wallets, same side, last 5 min)
         coordination_wallet_count = 0
         try:
-            coord = get_coordination_signal(self._conn, trade.market_id, trade.side)
+            coord = get_coordination_signal(self._conn, trade.market_id, trade.side, trade.wallet)
             if coord is not None:
                 coordination_wallet_count = coord[0]
         except Exception as exc:

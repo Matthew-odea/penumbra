@@ -290,7 +290,7 @@ async def get_market_volume(
             COUNT(*) AS trade_count,
             SUM(size_usd) AS volume_usd,
             COUNT(DISTINCT wallet) AS unique_wallets
-        FROM trades
+        FROM v_deduped_trades
         WHERE market_id = ?
           AND timestamp >= CURRENT_TIMESTAMP - INTERVAL (? || ' hours')
         GROUP BY 1

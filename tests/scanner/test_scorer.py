@@ -65,7 +65,7 @@ class TestComputeStatisticalScore:
         assert score == 40
 
     def test_price_impact_scoring(self):
-        """Price impact = 0.01 → int(0.01 * 1000) = 10 points."""
+        """Price impact = 0.01 → log10(0.01)+4=2, 2*4=8 points."""
         score = compute_statistical_score(
             z_score=0.0,
             price_impact=0.01,
@@ -75,12 +75,13 @@ class TestComputeStatisticalScore:
             funding_age_minutes=None,
             zscore_threshold=3.5,
         )
-        assert score == 10
+        assert score == 8
 
     def test_price_impact_capped_at_20(self):
+        """Price impact = 10.0 → log10(10)+4=5, 5*4=20 (capped at weight)."""
         score = compute_statistical_score(
             z_score=0.0,
-            price_impact=0.05,
+            price_impact=10.0,
             win_rate=None,
             is_whitelisted=False,
             funding_anomaly=False,
@@ -103,7 +104,7 @@ class TestComputeStatisticalScore:
         assert score == 20
 
     def test_high_win_rate_not_whitelisted(self):
-        """Win rate 0.7 (> 0.6) but not whitelisted → int(0.7 * 20) = 14."""
+        """Win rate 0.7 → smooth ramp: (0.7-0.5)/0.5=0.4, 0.4*20=8."""
         score = compute_statistical_score(
             z_score=0.0,
             price_impact=0.0,
@@ -113,7 +114,7 @@ class TestComputeStatisticalScore:
             funding_age_minutes=None,
             zscore_threshold=3.5,
         )
-        assert score == 14
+        assert score == 8
 
     def test_low_win_rate(self):
         """Win rate 0.5 (< 0.6) → 0 wallet points."""
@@ -168,12 +169,12 @@ class TestComputeStatisticalScore:
         assert score == 0
 
     def test_composite_max(self):
-        """All signals maxed → capped at 100."""
+        """All signals maxed → 100."""
         score = compute_statistical_score(
-            z_score=20.0,       # 40 pts
-            price_impact=0.1,   # 20 pts
+            z_score=20.0,        # 40 pts (capped)
+            price_impact=10.0,   # 20 pts (log10(10)+4=5, 5*4=20, capped)
             win_rate=0.9,
-            is_whitelisted=True,  # 20 pts
+            is_whitelisted=True, # 20 pts
             funding_anomaly=True,
             funding_age_minutes=3,  # 20 pts
             zscore_threshold=3.5,
@@ -184,14 +185,14 @@ class TestComputeStatisticalScore:
         """Realistic mixed scenario."""
         score = compute_statistical_score(
             z_score=5.0,        # (5.0-3.5)*10 = 15 pts
-            price_impact=0.005, # int(0.005*1000) = 5 pts
+            price_impact=0.005, # log10(0.005)+4=1.699, 1.699*4=6.8 → 6 pts
             win_rate=0.7,
-            is_whitelisted=False,  # int(0.7*20) = 14 pts
+            is_whitelisted=False,  # (0.7-0.5)/0.5*20=8 pts
             funding_anomaly=True,
             funding_age_minutes=10,  # 20 pts
             zscore_threshold=3.5,
         )
-        assert score == 54  # 15 + 5 + 14 + 20
+        assert score == 49  # 15 + 6 + 8 + 20
 
     def test_custom_threshold(self):
         """Custom threshold changes volume scoring."""
@@ -222,7 +223,7 @@ class TestBuildSignal:
             price_impact=0.01,
         )
         assert isinstance(signal, Signal)
-        assert signal.statistical_score == 35  # 20 (vol) + 10 (impact) + 5 (zero-history bonus: wallet_total_trades=None + size_usd 5000 > threshold 2500)
+        assert signal.statistical_score == 33  # 20 (vol: (5.5-3.5)*10) + 8 (impact: log) + 5 (zero-history bonus)
         assert signal.trade_id == "t1"
         assert signal.signal_id  # UUID assigned
 

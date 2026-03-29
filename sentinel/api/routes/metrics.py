@@ -43,7 +43,7 @@ async def timeseries(
             SELECT
                 time_bucket(INTERVAL (? || ' minutes'), timestamp) AS bucket,
                 COUNT(*) AS cnt
-            FROM trades
+            FROM v_deduped_trades
             WHERE timestamp >= CURRENT_TIMESTAMP - INTERVAL (? || ' hours')
             GROUP BY 1
         ),
@@ -114,7 +114,7 @@ async def overview() -> dict:
     # ── Detection funnel (today) ────────────────────────────────────
     funnel_row = db.execute("""
         SELECT
-            (SELECT COUNT(*) FROM trades
+            (SELECT COUNT(*) FROM v_deduped_trades
              WHERE timestamp >= CURRENT_DATE)                     AS trades_today,
             (SELECT COUNT(*) FROM signals
              WHERE created_at >= CURRENT_DATE)                    AS signals_today,
@@ -206,7 +206,7 @@ async def overview() -> dict:
             COUNT(*) AS trade_count,
             SUM(t.size_usd) AS volume_usd,
             COUNT(DISTINCT t.wallet) AS unique_wallets
-        FROM trades t
+        FROM v_deduped_trades t
         LEFT JOIN markets m ON t.market_id = m.market_id
         WHERE t.timestamp >= CURRENT_TIMESTAMP - INTERVAL '24 hours'
         GROUP BY t.market_id, m.question
@@ -299,7 +299,7 @@ async def ingestion() -> dict:
         SELECT
             COUNT(*) AS total,
             COUNT(*) FILTER (WHERE timestamp >= CURRENT_DATE) AS today
-        FROM trades
+        FROM v_deduped_trades
     """).fetchone()
 
     total_all = totals_row[0] if totals_row else 0
@@ -310,7 +310,7 @@ async def ingestion() -> dict:
         SELECT
             date_trunc('hour', timestamp) AS hour_bucket,
             COUNT(*) AS cnt
-        FROM trades
+        FROM v_deduped_trades
         WHERE timestamp >= CURRENT_TIMESTAMP - INTERVAL '24 hours'
         GROUP BY 1
         ORDER BY 1
@@ -329,7 +329,7 @@ async def ingestion() -> dict:
             MAX(timestamp) AS latest_rest,
             COUNT(DISTINCT market_id) FILTER (WHERE timestamp >= CURRENT_DATE) AS markets_today,
             COUNT(DISTINCT wallet) FILTER (WHERE timestamp >= CURRENT_DATE) AS wallets_today
-        FROM trades
+        FROM v_deduped_trades
     """).fetchone()
 
     return {
@@ -401,6 +401,80 @@ async def accuracy() -> list[dict]:
     return result
 
 
+@router.get("/metrics/accuracy/summary")
+async def accuracy_summary() -> dict:
+    """Global precision, recall, F1 across all resolved markets.
+
+    Uses the ``v_signal_outcomes`` view which joins signals → signal_reasoning
+    → markets and categorises each into TP/FP/FN/TN.
+    """
+    db = get_db()
+
+    row = db.execute("""
+        SELECT
+            COUNT(*) FILTER (WHERE confusion = 'TP')  AS tp,
+            COUNT(*) FILTER (WHERE confusion = 'FP')  AS fp,
+            COUNT(*) FILTER (WHERE confusion = 'FN')  AS fn,
+            COUNT(*) FILTER (WHERE confusion = 'TN')  AS tn,
+            COUNT(*) FILTER (WHERE confusion IS NOT NULL) AS total
+        FROM v_signal_outcomes
+    """).fetchone()
+
+    tp, fp, fn, tn, total = row
+    precision = tp / (tp + fp) if (tp + fp) > 0 else None
+    recall = tp / (tp + fn) if (tp + fn) > 0 else None
+    f1 = 2 * precision * recall / (precision + recall) if precision and recall else None
+
+    return {
+        "true_positives": tp,
+        "false_positives": fp,
+        "false_negatives": fn,
+        "true_negatives": tn,
+        "total_evaluated": total,
+        "precision": round(precision, 4) if precision is not None else None,
+        "recall": round(recall, 4) if recall is not None else None,
+        "f1_score": round(f1, 4) if f1 is not None else None,
+    }
+
+
+@router.get("/metrics/accuracy/calibration")
+async def accuracy_calibration() -> list[dict]:
+    """Calibration curve: for each score bucket, what fraction of trades were correct.
+
+    Reveals whether higher scores actually predict better outcomes.
+    """
+    db = get_db()
+
+    rows = db.execute("""
+        SELECT
+            CASE
+                WHEN COALESCE(suspicion_score, statistical_score) < 40 THEN '30-39'
+                WHEN COALESCE(suspicion_score, statistical_score) < 60 THEN '40-59'
+                WHEN COALESCE(suspicion_score, statistical_score) < 80 THEN '60-79'
+                ELSE '80+'
+            END AS score_bucket,
+            COUNT(*) AS total,
+            COUNT(*) FILTER (WHERE trade_correct = TRUE) AS correct,
+            COUNT(*) FILTER (WHERE classification = 'INFORMED') AS predicted_informed,
+            COUNT(*) FILTER (WHERE confusion = 'TP') AS true_positives
+        FROM v_signal_outcomes
+        GROUP BY 1
+        ORDER BY 1
+    """).fetchall()
+
+    return [
+        {
+            "score_bucket": r[0],
+            "total": r[1],
+            "correct": r[2],
+            "accuracy_pct": round(r[2] / r[1] * 100, 1) if r[1] > 0 else None,
+            "predicted_informed": r[3],
+            "true_positives": r[4],
+        }
+        for r in rows
+    ]
+
+
 @router.get("/metrics/patterns")
 async def patterns() -> list[dict]:
     """Hour-of-day trading patterns over the last 7 days.
@@ -416,7 +490,7 @@ async def patterns() -> list[dict]:
             COUNT(*)                                                                    AS total_trades,
             COUNT(DISTINCT s.signal_id)                                                AS signals,
             COUNT(DISTINCT sr.signal_id) FILTER (WHERE sr.classification = 'INFORMED') AS informed
-        FROM trades t
+        FROM v_deduped_trades t
         LEFT JOIN signals s ON t.trade_id = s.trade_id
         LEFT JOIN signal_reasoning sr ON s.signal_id = sr.signal_id
         WHERE t.timestamp >= CURRENT_TIMESTAMP - INTERVAL '7 days'

@@ -115,7 +115,7 @@ def get_zscore_for_market(conn: Any, market_id: str) -> float:
     Returns 0.0 if the market has no recent trade data.
     """
     row = conn.execute(_ZSCORE_FOR_MARKET_SQL, [market_id]).fetchone()
-    return float(row[0]) if row else 0.0
+    return float(row[0]) if row and row[0] is not None else 0.0
 
 
 def get_anomaly_for_market(conn: Any, market_id: str) -> VolumeAnomaly | None:
@@ -130,18 +130,24 @@ _OFI_SQL = """
 SELECT
     SUM(CASE WHEN side = 'BUY'  THEN size_usd ELSE 0 END) AS buy_vol,
     SUM(CASE WHEN side = 'SELL' THEN size_usd ELSE 0 END) AS sell_vol,
-    SUM(size_usd) AS total_vol
-FROM trades
+    SUM(size_usd) AS total_vol,
+    COUNT(*) AS trade_count
+FROM v_deduped_trades
 WHERE market_id = ?
   AND timestamp >= CURRENT_TIMESTAMP - INTERVAL '1 hour'
 """
+
+# Minimum trades in the OFI window for the signal to be meaningful.
+# With fewer trades, OFI approaches ±1.0 by construction and would
+# always trigger the multiplier.
+_OFI_MIN_TRADES = 5
 
 _CONCENTRATION_SQL = """
 SELECT
     COUNT(*) FILTER (WHERE market_id = ?) * 1.0 / COUNT(*) AS concentration
 FROM (
     SELECT market_id
-    FROM trades
+    FROM v_deduped_trades
     WHERE wallet = ?
     ORDER BY timestamp DESC
     LIMIT 50
@@ -156,13 +162,18 @@ WHERE market_id = ?
 
 
 def get_ofi_for_market(conn: Any, market_id: str) -> float:
-    """Return order flow imbalance ∈ [-1, 1] for the last hour.
+    """Return order flow imbalance in [-1, 1] for the last hour.
 
     Positive = net buying pressure; negative = net selling.
-    Returns 0.0 if no trades in the last hour.
+    Returns 0.0 (neutral) when fewer than ``_OFI_MIN_TRADES`` trades exist
+    in the window, since OFI with 1-2 trades is structurally +-1.0 and
+    would always trigger the scorer's OFI multiplier.
     """
     row = conn.execute(_OFI_SQL, [market_id]).fetchone()
     if not row or not row[2] or float(row[2]) == 0:
+        return 0.0
+    trade_count = int(row[3] or 0)
+    if trade_count < _OFI_MIN_TRADES:
         return 0.0
     buy_vol = float(row[0] or 0)
     sell_vol = float(row[1] or 0)
@@ -197,26 +208,68 @@ def get_zscore_5m_for_market(conn: Any, market_id: str) -> float:
     Returns 0.0 if the market has no data in the current 5-min window.
     """
     row = conn.execute(_ZSCORE_5M_FOR_MARKET_SQL, [market_id]).fetchone()
-    return float(row[0]) if row else 0.0
+    return float(row[0]) if row and row[0] is not None else 0.0
 
 
-_COORDINATION_SQL = """
-SELECT wallet_count, collective_volume_usd
-FROM v_coordination_signals
-WHERE market_id = ?
-  AND side = ?
-ORDER BY window_start DESC
-LIMIT 1
+_TRADE_SIZE_PERCENTILE_SQL = """
+SELECT
+    (SELECT COUNT(*) FROM v_deduped_trades
+     WHERE market_id = ? AND timestamp >= CURRENT_TIMESTAMP - INTERVAL '7 days'
+       AND size_usd <= ?) * 1.0
+    /
+    NULLIF((SELECT COUNT(*) FROM v_deduped_trades
+     WHERE market_id = ? AND timestamp >= CURRENT_TIMESTAMP - INTERVAL '7 days'), 0)
 """
 
 
-def get_coordination_signal(conn: Any, market_id: str, side: str) -> tuple[int, float] | None:
+def get_trade_size_percentile(conn: Any, market_id: str, size_usd: float) -> float:
+    """Return this trade's size percentile vs the market's 7-day history.
+
+    Returns 0.5 (neutral) if no data exists for the market.
+    """
+    row = conn.execute(_TRADE_SIZE_PERCENTILE_SQL, [market_id, size_usd, market_id]).fetchone()
+    return float(row[0]) if row and row[0] is not None else 0.5
+
+
+_COORDINATION_SQL = """
+SELECT
+    COUNT(DISTINCT wallet) AS wallet_count,
+    SUM(size_usd) AS collective_volume_usd
+FROM v_deduped_trades
+WHERE market_id = ?
+  AND side = ?
+  AND wallet != ''
+  AND wallet != ?
+  AND timestamp >= CURRENT_TIMESTAMP - INTERVAL '10 minutes'
+  AND to_timestamp(FLOOR(epoch(timestamp) / 300) * 300) = (
+      SELECT to_timestamp(FLOOR(epoch(timestamp) / 300) * 300)
+      FROM v_deduped_trades
+      WHERE market_id = ?
+        AND side = ?
+        AND wallet != ''
+        AND timestamp >= CURRENT_TIMESTAMP - INTERVAL '10 minutes'
+      GROUP BY 1
+      ORDER BY 1 DESC
+      LIMIT 1
+  )
+HAVING COUNT(DISTINCT wallet) >= 3
+"""
+
+
+def get_coordination_signal(
+    conn: Any, market_id: str, side: str, exclude_wallet: str = "",
+) -> tuple[int, float] | None:
     """Return (wallet_count, collective_volume_usd) for the most recent
-    5-min coordination window on this market+side.
+    5-min coordination window on this market+side, excluding *exclude_wallet*.
+
+    Excluding the triggering wallet prevents a single whale making multiple
+    trades from appearing as "coordination" with itself.
 
     Returns None if no coordination detected (< 3 distinct wallets).
     """
-    row = conn.execute(_COORDINATION_SQL, [market_id, side]).fetchone()
+    row = conn.execute(
+        _COORDINATION_SQL, [market_id, side, exclude_wallet, market_id, side],
+    ).fetchone()
     if not row:
         return None
     return int(row[0] or 0), float(row[1] or 0)
@@ -233,20 +286,20 @@ WITH recent AS (
 ),
 spread_stats AS (
     SELECT
-        arg_max(spread, ts) AS current_spread,
-        arg_min(spread, ts) AS oldest_spread
+        (SELECT spread FROM recent ORDER BY ts DESC LIMIT 1) AS current_spread,
+        MIN(spread) AS min_spread
     FROM recent
 )
 SELECT
     current_spread,
-    oldest_spread,
+    min_spread,
     CASE
-        WHEN oldest_spread > 0
-        THEN (current_spread - oldest_spread) / oldest_spread
+        WHEN min_spread > 0
+        THEN (current_spread - min_spread) / min_spread
         ELSE 0
     END AS spread_change_pct
 FROM spread_stats
-WHERE oldest_spread IS NOT NULL
+WHERE min_spread IS NOT NULL
 """
 
 

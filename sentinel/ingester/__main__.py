@@ -157,17 +157,26 @@ async def _market_attractiveness_scorer(
 
 
 def _enqueue_unscored_markets(conn: object, queue: asyncio.Queue[str]) -> int:
-    """Query DB for markets without attractiveness scores and enqueue them."""
+    """Query DB for markets without attractiveness scores and enqueue them.
+
+    Silently drops items when the queue is full (bounded to prevent unbounded
+    growth after budget exhaustion). Dropped markets will be picked up on the
+    next periodic sync.
+    """
     try:
         rows = conn.execute(  # type: ignore[attr-defined]
             "SELECT market_id FROM markets WHERE attractiveness_score IS NULL"
         ).fetchall()
         count = 0
+        dropped = 0
         for (market_id,) in rows:
-            queue.put_nowait(market_id)
-            count += 1
+            try:
+                queue.put_nowait(market_id)
+                count += 1
+            except asyncio.QueueFull:
+                dropped += 1
         if count:
-            logger.info("Queued markets for attractiveness scoring", count=count)
+            logger.info("Queued markets for attractiveness scoring", count=count, dropped=dropped or None)
         return count
     except Exception as exc:
         logger.warning("Failed to enqueue unscored markets", error=str(exc))
@@ -193,8 +202,11 @@ async def _on_demand_market_resolver(
             raw = await fetch_market_by_id(market_id)
             if raw:
                 _, _ = upsert_markets(conn, [raw])  # type: ignore[arg-type]
-                # Queue newly discovered market for LLM scoring
-                scoring_queue.put_nowait(market_id)
+                # Queue newly discovered market for LLM scoring (drop if full)
+                try:
+                    scoring_queue.put_nowait(market_id)
+                except asyncio.QueueFull:
+                    pass  # will be picked up on next periodic sync
                 logger.info("On-demand market metadata fetched", market_id=market_id)
             else:
                 logger.debug("Market not found via REST", market_id=market_id)
@@ -205,20 +217,50 @@ async def _on_demand_market_resolver(
         await asyncio.sleep(1.0)  # gentle rate limit
 
 
+async def _sync_with_retry(
+    conn: object,
+    scoring_queue: asyncio.Queue[str],
+    *,
+    max_retries: int = 4,
+    initial_backoff: float = 30.0,
+) -> int:
+    """Run sync_markets with exponential backoff on failure.
+
+    Returns the number of markets synced, or 0 if all retries exhausted.
+    """
+    backoff = initial_backoff
+    for attempt in range(1, max_retries + 1):
+        try:
+            count = await sync_markets(conn)  # type: ignore[arg-type]
+            _enqueue_unscored_markets(conn, scoring_queue)
+            return count
+        except Exception as exc:
+            logger.error(
+                "Market sync failed",
+                error=str(exc),
+                attempt=attempt,
+                max_retries=max_retries,
+                retry_in_s=backoff if attempt < max_retries else None,
+            )
+            if attempt < max_retries:
+                await asyncio.sleep(backoff)
+                backoff = min(backoff * 2, 600)  # cap at 10 min
+    return 0
+
+
 async def _periodic_market_sync(
     conn: object,
     interval_hours: int,
     scoring_queue: asyncio.Queue[str],
 ) -> None:
-    """Re-sync all market metadata on a timer and queue any newly unscored markets."""
+    """Re-sync all market metadata on a timer with retry on failure."""
     while True:
         await asyncio.sleep(interval_hours * 3600)
-        try:
-            count = await sync_markets(conn)  # type: ignore[arg-type]
+        count = await _sync_with_retry(conn, scoring_queue)
+        if count:
             logger.info("Periodic market sync complete", count=count)
-            _enqueue_unscored_markets(conn, scoring_queue)
-        except Exception as exc:
-            logger.error("Market sync failed", error=str(exc))
+        else:
+            logger.error("Periodic market sync failed after all retries")
 
 
 async def _periodic_hot_market_refresh(
@@ -301,6 +343,8 @@ async def _periodic_status(
             parts["alerts"] = judge.alerts_emitted
             if judge.skipped_budget:
                 parts["judge_skipped"] = judge.skipped_budget
+        if listener.reconnect_count:
+            parts["ws_reconnects"] = listener.reconnect_count
         logger.info("status", **parts)
 
 
@@ -318,7 +362,9 @@ async def run_ingester(
     scanner_queue: asyncio.Queue[list[Trade | BookEvent]] = asyncio.Queue()
     judge_queue: asyncio.Queue[Signal] = asyncio.Queue()
     alert_queue: asyncio.Queue[Alert] = asyncio.Queue()
-    scoring_queue: asyncio.Queue[str] = asyncio.Queue()
+    # Bounded queue prevents unbounded growth after budget exhaustion.
+    # 5000 is enough for one full market sync (~3900 markets).
+    scoring_queue: asyncio.Queue[str] = asyncio.Queue(maxsize=5000)
 
     writer = BatchWriter(
         conn,
@@ -397,32 +443,39 @@ async def run_ingester(
             logger.error("Failed to bootstrap active markets", error=str(exc))
             asset_ids = []
 
-    listener = Listener(
-        on_trade=_on_trade,
-        on_book_event=_on_book_event,
-        asset_ids=asset_ids,
-        dry_run=dry_run,
-    )
-
     poller = TradePoller(
         on_trade=_on_trade,
         condition_ids=condition_ids,
         dry_run=dry_run,
     )
 
+    async def _on_ws_reconnect() -> None:
+        """Trigger an immediate REST poll to backfill trades missed during WS gap."""
+        if poller._condition_ids:
+            logger.info("WS reconnected — triggering backfill poll", markets=len(poller._condition_ids))
+            try:
+                await poller._poll_batch(poller._condition_ids)
+            except Exception as exc:
+                logger.warning("Backfill poll after WS reconnect failed", error=str(exc))
+
+    listener = Listener(
+        on_trade=_on_trade,
+        on_book_event=_on_book_event,
+        on_reconnect=_on_ws_reconnect,
+        asset_ids=asset_ids,
+        dry_run=dry_run,
+    )
+
     tasks: list[asyncio.Task] = []
 
     if not dry_run and conn is not None:
-        # 1. Initial full market sync (all markets, no category filter)
+        # 1. Initial full market sync with retry (critical for hot tier)
         logger.info("Running initial market sync (all markets)...")
-        try:
-            count = await sync_markets(conn)
+        count = await _sync_with_retry(conn, scoring_queue)
+        if count:
             logger.info("Initial market sync complete", count=count)
-        except Exception as exc:
-            logger.warning("Initial market sync failed (continuing)", error=str(exc))
-
-        # 2. Queue all unscored markets for LLM attractiveness scoring
-        _enqueue_unscored_markets(conn, scoring_queue)
+        else:
+            logger.warning("Initial market sync failed after retries — continuing with stale data")
 
         # 3. Now that we have the full DB, build the initial hot tier from priority formula
         try:

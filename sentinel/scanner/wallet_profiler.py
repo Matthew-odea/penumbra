@@ -87,6 +87,25 @@ def _row_to_profile(
     )
 
 
+_RESOLVED_TRADE_COUNT_SQL = """
+SELECT COUNT(*)
+FROM v_deduped_trades t
+JOIN markets m ON t.market_id = m.market_id
+WHERE t.wallet = ? AND m.resolved = TRUE
+"""
+
+
+def get_resolved_trade_count(conn: Any, wallet: str) -> int:
+    """Return the total number of resolved trades for a wallet (no minimum threshold).
+
+    Unlike ``get_wallet_profile`` (which returns None for < 5 trades), this
+    always returns the actual count. Used to distinguish "truly new wallet"
+    (0 trades) from "has some history but below the profiling threshold" (1-4).
+    """
+    row = conn.execute(_RESOLVED_TRADE_COUNT_SQL, [wallet]).fetchone()
+    return int(row[0]) if row else 0
+
+
 def get_wallet_profile(conn: Any, wallet: str) -> WalletProfile | None:
     """Look up a single wallet's performance on resolved markets.
 

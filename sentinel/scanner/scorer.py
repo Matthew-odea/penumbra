@@ -17,6 +17,7 @@ Weight distribution (configurable):
 
 from __future__ import annotations
 
+import math
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -154,13 +155,16 @@ def compute_statistical_score(
         if ofi_score is not None:
             abs_ofi = abs(ofi_score)
             if abs_ofi >= 0.4:
-                # Directional alignment: does the trade go with the flow?
+                # Contrarian trading is the insider signature: an informed
+                # seller dumps into buying pressure, an informed buyer
+                # accumulates during a sell-off.  Boost contrarian trades;
+                # dampen with-flow trades (more likely momentum/herding).
                 flow_is_buy = ofi_score > 0
                 trade_is_buy = side.upper() == "BUY"
-                if flow_is_buy == trade_is_buy:
+                if flow_is_buy != trade_is_buy:
                     ofi_mult = 1.5 if abs_ofi >= 0.7 else 1.2
                 else:
-                    ofi_mult = 1.0  # Against flow — don't penalise, may still be informed
+                    ofi_mult = 0.8 if abs_ofi >= 0.7 else 1.0
             elif abs_ofi < 0.2:
                 # Measured balanced flow: volume spike more likely noise
                 ofi_mult = 0.8
@@ -171,13 +175,22 @@ def compute_statistical_score(
         score += min(w_vol, int(raw_vol_score * ofi_mult))
 
     # ── Price impact (0–w_imp points) ────────────────────────────────────
-    score += min(w_imp, int(price_impact * 1000))
+    # Log scaling maps the empirical range [0.0001, 10] to [0, 20] points.
+    # Linear scaling (the old `int(price_impact * 1000)`) produced near-zero
+    # scores for typical Polymarket trades where impact is O(0.001).
+    if price_impact > 0:
+        raw_pts = int((math.log10(price_impact) + 4) * 4)
+        score += min(w_imp, max(0, raw_pts))
+
 
     # ── Wallet reputation + concentration (0–w_wal points + bonus) ───────
     if is_whitelisted:
         score += w_wal
-    elif win_rate and win_rate > 0.6:
-        score += int(win_rate * w_wal)
+    elif win_rate is not None and win_rate > 0.5:
+        # Smooth ramp: 0 pts at 50%, full w_wal pts at 100%.
+        # Replaces the old hard cutoff at 60% which created a 0→12 cliff.
+        ramp = (win_rate - 0.5) / 0.5
+        score += min(w_wal, round(ramp * w_wal))
 
     # Concentration bonus: single-market wallets are a key insider tell
     if market_concentration >= 0.8:

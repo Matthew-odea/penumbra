@@ -60,6 +60,28 @@ CREATE INDEX IF NOT EXISTS idx_trades_wallet
 CREATE INDEX IF NOT EXISTS idx_trades_timestamp
     ON trades (timestamp);
 
+-- Deduplicated trades: WS and REST can ingest the same physical trade with
+-- different trade_ids (WS uses synthetic IDs, REST uses the real API ID).
+-- This view keeps one row per physical trade, preferring the REST version
+-- (which has wallet address and tx_hash) over the WS version.
+-- Dedup key: (market_id, side, second-truncated timestamp, rounded size).
+CREATE OR REPLACE VIEW v_deduped_trades AS
+WITH ranked AS (
+    SELECT *,
+        ROW_NUMBER() OVER (
+            PARTITION BY market_id, side,
+                date_trunc('second', timestamp),
+                ROUND(size_usd::DOUBLE, 2)
+            ORDER BY
+                CASE WHEN source = 'rest' THEN 0 ELSE 1 END,
+                ingested_at DESC
+        ) AS rn
+    FROM trades
+)
+SELECT trade_id, market_id, asset_id, wallet, side,
+       price, size_usd, timestamp, tx_hash, source, ingested_at
+FROM ranked WHERE rn = 1;
+
 -- ─── Signal Tables ───────────────────────────────────────────────────────────
 
 CREATE TABLE IF NOT EXISTS signals (
@@ -130,7 +152,7 @@ SELECT
     COUNT(*) AS trade_count,
     SUM(size_usd) AS volume_usd,
     COUNT(DISTINCT wallet) AS unique_wallets
-FROM trades
+FROM v_deduped_trades
 WHERE timestamp >= CURRENT_TIMESTAMP - INTERVAL '7 days'
 GROUP BY 1, 2;
 
@@ -168,7 +190,7 @@ SELECT
     CASE
         WHEN mm.mad_vol > 0
         THEN 0.6745 * (h.volume_usd - ms.median_vol) / mm.mad_vol
-        ELSE 0
+        ELSE NULL
     END AS modified_z_score
 FROM hourly h
 JOIN market_stats ms ON h.market_id = ms.market_id
@@ -192,7 +214,7 @@ SELECT
         ) / SUM(size_usd)
         ELSE 0
     END AS ofi
-FROM trades
+FROM v_deduped_trades
 WHERE timestamp >= CURRENT_TIMESTAMP - INTERVAL '24 hours'
 GROUP BY 1, 2;
 
@@ -205,7 +227,7 @@ SELECT
     COUNT(*) AS trade_count,
     SUM(size_usd) AS volume_usd,
     COUNT(DISTINCT wallet) AS unique_wallets
-FROM trades
+FROM v_deduped_trades
 WHERE timestamp >= CURRENT_TIMESTAMP - INTERVAL '2 hours'
 GROUP BY 1, 2;
 
@@ -239,7 +261,7 @@ SELECT
     CASE
         WHEN mm.mad_vol > 0
         THEN 0.6745 * (v.volume_usd - ms.median_vol) / mm.mad_vol
-        ELSE 0
+        ELSE NULL
     END AS modified_z_score
 FROM v_5m_volume v
 JOIN market_stats ms ON v.market_id = ms.market_id
@@ -253,7 +275,7 @@ SELECT
     to_timestamp(FLOOR(epoch(timestamp) / 300) * 300) AS window_start,
     COUNT(DISTINCT wallet) AS wallet_count,
     SUM(size_usd) AS collective_volume_usd
-FROM trades
+FROM v_deduped_trades
 WHERE timestamp >= CURRENT_TIMESTAMP - INTERVAL '10 minutes'
   AND wallet != ''
 GROUP BY 1, 2, 3
@@ -291,12 +313,57 @@ SELECT
         END)::FLOAT / COUNT(*)
         ELSE 0
     END AS win_rate
-FROM trades t
+FROM v_deduped_trades t
 JOIN markets m ON t.market_id = m.market_id
 WHERE m.resolved = TRUE
   AND t.wallet != ''
 GROUP BY t.wallet
 HAVING COUNT(*) >= 5;
+
+-- Signal outcome validation: joins signals to market resolution for accuracy tracking.
+-- Each row is one signal on a resolved market with its confusion matrix category.
+CREATE OR REPLACE VIEW v_signal_outcomes AS
+SELECT
+    s.signal_id,
+    s.market_id,
+    s.wallet,
+    s.side,
+    s.price,
+    s.size_usd,
+    s.statistical_score,
+    s.trade_timestamp,
+    sr.classification,
+    sr.suspicion_score,
+    m.question,
+    m.resolved_price,
+    CASE
+        WHEN (s.side = 'BUY' AND m.resolved_price >= 0.95) OR
+             (s.side = 'SELL' AND m.resolved_price <= 0.05)
+        THEN TRUE ELSE FALSE
+    END AS trade_correct,
+    CASE
+        WHEN sr.classification = 'INFORMED' AND (
+            (s.side = 'BUY' AND m.resolved_price >= 0.95) OR
+            (s.side = 'SELL' AND m.resolved_price <= 0.05)
+        ) THEN 'TP'
+        WHEN sr.classification = 'INFORMED' AND NOT (
+            (s.side = 'BUY' AND m.resolved_price >= 0.95) OR
+            (s.side = 'SELL' AND m.resolved_price <= 0.05)
+        ) THEN 'FP'
+        WHEN sr.classification = 'NOISE' AND (
+            (s.side = 'BUY' AND m.resolved_price >= 0.95) OR
+            (s.side = 'SELL' AND m.resolved_price <= 0.05)
+        ) THEN 'FN'
+        WHEN sr.classification = 'NOISE' AND NOT (
+            (s.side = 'BUY' AND m.resolved_price >= 0.95) OR
+            (s.side = 'SELL' AND m.resolved_price <= 0.05)
+        ) THEN 'TN'
+    END AS confusion
+FROM signals s
+LEFT JOIN signal_reasoning sr ON s.signal_id = sr.signal_id
+JOIN markets m ON s.market_id = m.market_id
+WHERE m.resolved = TRUE
+  AND m.resolved_price IS NOT NULL;
 """
 
 

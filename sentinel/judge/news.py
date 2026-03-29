@@ -11,6 +11,7 @@ Features:
 
 from __future__ import annotations
 
+import asyncio
 import time
 from collections import OrderedDict
 from typing import Any
@@ -75,28 +76,41 @@ async def _search_tavily(
     *,
     max_results: int = 5,
     lookback_days: int = 3,
+    retries: int = 2,
 ) -> list[str]:
-    """Call Tavily search and return a list of headline strings."""
+    """Call Tavily search and return a list of headline strings.
+
+    Retries once with a 2-second backoff on transient errors (rate-limit,
+    timeout, 5xx).
+    """
     if not settings.tavily_api_key:
         raise RuntimeError("TAVILY_API_KEY not configured")
 
-    async with httpx.AsyncClient(timeout=10) as client:
-        resp = await client.post(
-            "https://api.tavily.com/search",
-            json={
-                "api_key": settings.tavily_api_key,
-                "query": query,
-                "max_results": max_results,
-                "search_depth": "basic",
-                "include_answer": False,
-                "days": lookback_days,
-            },
-        )
-        resp.raise_for_status()
-        data = resp.json()
+    last_exc: Exception | None = None
+    for attempt in range(retries):
+        try:
+            async with httpx.AsyncClient(timeout=10) as client:
+                resp = await client.post(
+                    "https://api.tavily.com/search",
+                    json={
+                        "api_key": settings.tavily_api_key,
+                        "query": query,
+                        "max_results": max_results,
+                        "search_depth": "basic",
+                        "include_answer": False,
+                        "days": lookback_days,
+                    },
+                )
+                resp.raise_for_status()
+                data = resp.json()
 
-    results: list[dict[str, Any]] = data.get("results", [])
-    return [r.get("title", "") for r in results if r.get("title")]
+            results: list[dict[str, Any]] = data.get("results", [])
+            return [r.get("title", "") for r in results if r.get("title")]
+        except (httpx.HTTPStatusError, httpx.TimeoutException, httpx.ConnectError) as exc:
+            last_exc = exc
+            if attempt < retries - 1:
+                await asyncio.sleep(2)  # brief backoff before retry
+    raise last_exc  # type: ignore[misc]
 
 
 # ── Exa fallback ────────────────────────────────────────────────────────────
@@ -178,8 +192,10 @@ async def fetch_news(
     except Exception as exc:
         logger.warning("Exa search also failed", error=str(exc))
 
-    # Both failed — cache empty to avoid hammering
-    _set_cache(market_id, [])
+    # Both failed — cache empty with short TTL (5 min) so we retry soon
+    # rather than caching the error for the full 12h TTL.
+    key = _cache_key(market_id)
+    _cache[key] = (time.monotonic() - _get_cache_ttl() + 300, [])  # expires in 5 min
     return []
 
 

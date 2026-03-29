@@ -44,6 +44,24 @@ def _init_db() -> duckdb.DuckDBPyConnection:
         )
     """)
     conn.execute("""
+        CREATE OR REPLACE VIEW v_deduped_trades AS
+        WITH ranked AS (
+            SELECT *,
+                ROW_NUMBER() OVER (
+                    PARTITION BY market_id, side,
+                        date_trunc('second', timestamp),
+                        ROUND(size_usd::DOUBLE, 2)
+                    ORDER BY
+                        CASE WHEN source = 'rest' THEN 0 ELSE 1 END,
+                        ingested_at DESC
+                ) AS rn
+            FROM trades
+        )
+        SELECT trade_id, market_id, asset_id, wallet, side,
+               price, size_usd, timestamp, tx_hash, source, ingested_at
+        FROM ranked WHERE rn = 1
+    """)
+    conn.execute("""
         CREATE OR REPLACE VIEW v_wallet_performance AS
         SELECT
             t.wallet,
@@ -62,9 +80,10 @@ def _init_db() -> duckdb.DuckDBPyConnection:
                 END)::FLOAT / COUNT(*)
                 ELSE 0
             END AS win_rate
-        FROM trades t
+        FROM v_deduped_trades t
         JOIN markets m ON t.market_id = m.market_id
         WHERE m.resolved = TRUE
+          AND t.wallet != ''
         GROUP BY t.wallet
         HAVING COUNT(*) >= 5
     """)
@@ -79,10 +98,15 @@ def _seed_resolved_market(conn: duckdb.DuckDBPyConnection, market_id: str, resol
     )
 
 
+_trade_counter: list[int] = [0]  # mutable container avoids global statement
+
+
 def _seed_trade(conn: duckdb.DuckDBPyConnection, trade_id: str, market_id: str, wallet: str, side: str = "BUY"):
+    # Each trade gets a unique timestamp so v_deduped_trades doesn't collapse them
+    _trade_counter[0] += 1
     conn.execute(
-        "INSERT INTO trades VALUES (?, ?, 'a1', ?, ?, 0.5, 100.0, CURRENT_TIMESTAMP, NULL, 'ws', CURRENT_TIMESTAMP)",
-        [trade_id, market_id, wallet, side],
+        "INSERT INTO trades VALUES (?, ?, 'a1', ?, ?, 0.5, 100.0, CURRENT_TIMESTAMP - INTERVAL (? || ' seconds'), NULL, 'ws', CURRENT_TIMESTAMP)",
+        [trade_id, market_id, wallet, side, _trade_counter[0]],
     )
 
 

@@ -43,7 +43,7 @@ WITH trade_window AS (
         t.size_usd,
         t.timestamp,
         LAG(t.price) OVER (PARTITION BY t.market_id ORDER BY t.timestamp) AS prev_price
-    FROM trades t
+    FROM v_deduped_trades t
     WHERE t.market_id = ?
       AND t.timestamp >= CURRENT_TIMESTAMP - INTERVAL '24 hours'
 )
@@ -75,7 +75,7 @@ WITH trade_window AS (
         t.size_usd,
         t.timestamp,
         LAG(t.price) OVER (PARTITION BY t.market_id ORDER BY t.timestamp) AS prev_price
-    FROM trades t
+    FROM v_deduped_trades t
     WHERE t.timestamp >= CURRENT_TIMESTAMP - INTERVAL '24 hours'
       AND t.size_usd >= ?
 )

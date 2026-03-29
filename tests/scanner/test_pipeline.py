@@ -67,6 +67,25 @@ def _init_db() -> duckdb.DuckDBPyConnection:
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     """)
+    # Dedup view
+    conn.execute("""
+        CREATE OR REPLACE VIEW v_deduped_trades AS
+        WITH ranked AS (
+            SELECT *,
+                ROW_NUMBER() OVER (
+                    PARTITION BY market_id, side,
+                        date_trunc('second', timestamp),
+                        ROUND(size_usd::DOUBLE, 2)
+                    ORDER BY
+                        CASE WHEN source = 'rest' THEN 0 ELSE 1 END,
+                        ingested_at DESC
+                ) AS rn
+            FROM trades
+        )
+        SELECT trade_id, market_id, asset_id, wallet, side,
+               price, size_usd, timestamp, tx_hash, source, ingested_at
+        FROM ranked WHERE rn = 1
+    """)
     # Views
     conn.execute("""
         CREATE OR REPLACE VIEW v_hourly_volume AS
@@ -76,7 +95,7 @@ def _init_db() -> duckdb.DuckDBPyConnection:
             COUNT(*) AS trade_count,
             SUM(size_usd) AS volume_usd,
             COUNT(DISTINCT wallet) AS unique_wallets
-        FROM trades
+        FROM v_deduped_trades
         WHERE timestamp >= CURRENT_TIMESTAMP - INTERVAL '7 days'
         GROUP BY 1, 2
     """)
@@ -98,7 +117,7 @@ def _init_db() -> duckdb.DuckDBPyConnection:
         )
         SELECT h.market_id, h.hour_bucket, h.volume_usd, h.trade_count, h.unique_wallets,
             ms.median_vol, mm.mad_vol,
-            CASE WHEN mm.mad_vol > 0 THEN 0.6745 * (h.volume_usd - ms.median_vol) / mm.mad_vol ELSE 0 END AS modified_z_score
+            CASE WHEN mm.mad_vol > 0 THEN 0.6745 * (h.volume_usd - ms.median_vol) / mm.mad_vol ELSE NULL END AS modified_z_score
         FROM hourly h
         JOIN market_stats ms ON h.market_id = ms.market_id
         JOIN market_mad mm ON h.market_id = mm.market_id
@@ -109,7 +128,7 @@ def _init_db() -> duckdb.DuckDBPyConnection:
             COUNT(*) AS total_resolved_trades,
             SUM(CASE WHEN (t.side='BUY' AND m.resolved_price>=0.95) OR (t.side='SELL' AND m.resolved_price<=0.05) THEN 1 ELSE 0 END) AS wins,
             CASE WHEN COUNT(*)>0 THEN SUM(CASE WHEN (t.side='BUY' AND m.resolved_price>=0.95) OR (t.side='SELL' AND m.resolved_price<=0.05) THEN 1 ELSE 0 END)::FLOAT/COUNT(*) ELSE 0 END AS win_rate
-        FROM trades t JOIN markets m ON t.market_id=m.market_id WHERE m.resolved=TRUE GROUP BY t.wallet HAVING COUNT(*)>=5
+        FROM v_deduped_trades t JOIN markets m ON t.market_id=m.market_id WHERE m.resolved=TRUE AND t.wallet != '' GROUP BY t.wallet HAVING COUNT(*)>=5
     """)
     return conn
 

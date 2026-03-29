@@ -31,7 +31,7 @@ async def list_wallets(
                 ELSE 0.0
             END AS signal_hit_rate
         FROM v_wallet_performance vwp
-        LEFT JOIN trades t ON vwp.wallet = t.wallet
+        LEFT JOIN v_deduped_trades t ON vwp.wallet = t.wallet
         LEFT JOIN signals s ON vwp.wallet = s.wallet
         GROUP BY vwp.wallet, vwp.total_resolved_trades, vwp.wins, vwp.win_rate
         ORDER BY vwp.win_rate * vwp.total_resolved_trades DESC
@@ -75,7 +75,7 @@ async def get_wallet(address: str) -> dict:
 
     # Total trades (including unresolved)
     total_row = db.execute(
-        "SELECT COUNT(*) FROM trades WHERE wallet = ?",
+        "SELECT COUNT(*) FROM v_deduped_trades WHERE wallet = ?",
         [address],
     ).fetchone()
 
@@ -86,7 +86,7 @@ async def get_wallet(address: str) -> dict:
             COALESCE(m.category, 'Unknown') AS category,
             COUNT(*) AS trades,
             SUM(t.size_usd) AS volume_usd
-        FROM trades t
+        FROM v_deduped_trades t
         LEFT JOIN markets m ON t.market_id = m.market_id
         WHERE t.wallet = ?
         GROUP BY 1
@@ -140,7 +140,7 @@ async def get_wallet_trades(
             m.category,
             m.resolved,
             m.resolved_price
-        FROM trades t
+        FROM v_deduped_trades t
         LEFT JOIN markets m ON t.market_id = m.market_id
         WHERE t.wallet = ?
         ORDER BY t.timestamp DESC

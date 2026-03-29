@@ -39,9 +39,10 @@ _SSL_CTX.check_hostname = False
 _SSL_CTX.verify_mode = ssl.CERT_NONE
 
 # Bounded LRU seen-set to avoid reprocessing recent trades.
-# Sized to hold trade_poll_limit × hot_market_count with headroom.
-# At 1000 limit × 50 markets = 50K; 200K gives 4× safety margin.
-_SEEN_SET_MAX = 200_000
+# The REST API returns the most recent N trades per market (not just new ones),
+# so the set must hold IDs across many poll cycles without evicting.
+# 500K holds ~10 full cycles (50 markets × 1000 trades × 10 cycles).
+_SEEN_SET_MAX = 500_000
 
 
 class _BoundedSet:
