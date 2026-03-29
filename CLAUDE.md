@@ -98,8 +98,8 @@ Migrations (v002-v014) are applied idempotently in `init_schema()`.
 | `min_trade_size_usd` | 100 | Minimum trade size to process |
 | `signal_min_score` | 30 | Minimum composite score to emit signal |
 | `alert_min_score` | 80 | Minimum score for alert emission |
-| `bedrock_market_scoring_daily_limit` | 4000 | Market attractiveness scoring budget |
-| `hot_market_count` | 50 | Size of hot polling tier |
+| `bedrock_market_scoring_daily_limit` | 50000 | Market attractiveness scoring budget |
+| `hot_market_count` | 100 | Size of hot polling tier |
 | `ingester_batch_size` | 20 | Trades per write batch |
 | `trade_poll_interval_seconds` | 5 | REST poller frequency |
 | `market_sync_interval_hours` | 2 | Full market metadata re-sync |

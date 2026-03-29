@@ -53,14 +53,14 @@ def _insert_correlated_trades(conn: duckdb.DuckDBPyConnection, n_windows: int = 
     """
     now = datetime.now(tz=UTC)
     for i in range(n_windows):
-        ts = now - timedelta(minutes=55) + timedelta(minutes=i * 5)
+        ts = now - timedelta(minutes=50) + timedelta(minutes=i * 5)
         buy_size = 400.0 + i * 50  # More buying over time
         sell_size = 300.0 - i * 20  # Less selling
         # signed_volume = buy_size - sell_size = 100 + 70*i
         # delta_price proportional to signed_volume
         net_flow = buy_size - sell_size
         start_price = 0.50
-        end_price = start_price + net_flow * 0.0001  # Positive correlation
+        end_price = start_price + net_flow * 0.001  # Positive correlation
         conn.execute(
             "INSERT INTO trades VALUES (?, 'm1', 'a1', 'w1', 'BUY', ?, ?, ?, NULL, 'rest',"
             " CURRENT_TIMESTAMP)",

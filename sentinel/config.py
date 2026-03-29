@@ -40,7 +40,7 @@ class Settings(BaseSettings):
     # This supports local dev, EC2/ECS IAM roles, and GitHub OIDC in CI.
     aws_region: str = "us-east-1"
     bedrock_tier1_model: str = "amazon.nova-lite-v1:0"
-    bedrock_market_scoring_daily_limit: int = 4000  # Market attractiveness scoring budget
+    bedrock_market_scoring_daily_limit: int = 50000  # Market attractiveness scoring budget
 
     # ── Polygon / Alchemy ───────────────────────────────────────────────────
     polygon_rpc_url: str = "https://polygon-rpc.com"
@@ -92,7 +92,7 @@ class Settings(BaseSettings):
         return self
 
     # ── Market Intelligence ──────────────────────────────────────────────────
-    hot_market_count: int = 50                  # Size of hot polling tier
+    hot_market_count: int = 100                 # Size of hot polling tier
     hot_market_min_score: int = 60              # Attractiveness threshold for hot tier
     hot_market_min_liquidity: float = 0.0       # 0: Polymarket API returns liquidity=None→0.0; priority formula deprioritises illiquid markets naturally
     hot_market_refresh_interval_seconds: int = 1800  # 30 min
