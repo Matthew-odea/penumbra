@@ -239,3 +239,19 @@ export interface CalibrationBucket {
   accuracy_pct: number | null
   true_positives: number
 }
+
+export interface VPINPoint {
+  timestamp: string
+  imbalance: number | null
+  bucket_volume: number
+  buy_vol: number
+  sell_vol: number
+}
+
+export interface LambdaPoint {
+  timestamp: string
+  lambda_value: number | null
+  r_squared: number | null
+  residual_std: number | null
+  n_obs: number | null
+}

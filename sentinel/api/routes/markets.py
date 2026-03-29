@@ -336,6 +336,73 @@ async def get_market_anomalies(market_id: str) -> list[dict]:
     ]
 
 
+@router.get("/markets/{market_id}/vpin")
+async def get_market_vpin(
+    market_id: str,
+    hours: int = Query(24, ge=1, le=168),
+) -> list[dict]:
+    """VPIN time series for a market — one point per completed bucket."""
+    db = get_db()
+
+    rows = db.execute(
+        """
+        SELECT
+            bucket_end,
+            ABS(buy_vol - sell_vol) / NULLIF(bucket_volume, 0) AS imbalance,
+            bucket_volume,
+            buy_vol,
+            sell_vol
+        FROM vpin_buckets
+        WHERE market_id = ?
+          AND bucket_end >= CURRENT_TIMESTAMP - INTERVAL (? || ' hours')
+        ORDER BY bucket_idx
+        """,
+        [market_id, hours],
+    ).fetchall()
+
+    return [
+        {
+            "timestamp": r[0].isoformat(),
+            "imbalance": round(float(r[1]), 4) if r[1] is not None else None,
+            "bucket_volume": float(r[2]) if r[2] else 0,
+            "buy_vol": float(r[3]) if r[3] else 0,
+            "sell_vol": float(r[4]) if r[4] else 0,
+        }
+        for r in rows
+    ]
+
+
+@router.get("/markets/{market_id}/lambda")
+async def get_market_lambda(
+    market_id: str,
+    hours: int = Query(24, ge=1, le=168),
+) -> list[dict]:
+    """Kyle's Lambda estimates over time for a market."""
+    db = get_db()
+
+    rows = db.execute(
+        """
+        SELECT estimated_at, lambda_value, r_squared, residual_std, n_obs
+        FROM market_lambda
+        WHERE market_id = ?
+          AND estimated_at >= CURRENT_TIMESTAMP - INTERVAL (? || ' hours')
+        ORDER BY estimated_at
+        """,
+        [market_id, hours],
+    ).fetchall()
+
+    return [
+        {
+            "timestamp": r[0].isoformat(),
+            "lambda_value": float(r[1]) if r[1] is not None else None,
+            "r_squared": float(r[2]) if r[2] is not None else None,
+            "residual_std": float(r[3]) if r[3] is not None else None,
+            "n_obs": r[4],
+        }
+        for r in rows
+    ]
+
+
 @router.get("/markets/{market_id}/signals")
 async def get_market_signals(
     market_id: str,
@@ -343,4 +410,7 @@ async def get_market_signals(
 ) -> list[dict]:
     """Signals for a specific market."""
     from sentinel.api.routes.signals import list_signals
-    return await list_signals(limit=limit, offset=0, min_score=0, market_id=market_id, wallet=None)
+    return await list_signals(
+        limit=limit, offset=0, min_score=0,
+        market_id=market_id, wallet=None, hours=None, search=None,
+    )

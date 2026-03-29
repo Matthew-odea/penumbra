@@ -7,6 +7,8 @@ import type {
   MarketDetail,
   VolumePoint,
   AnomalyPoint,
+  VPINPoint,
+  LambdaPoint,
   WalletProfile,
   WalletTrade,
   WalletLeader,
@@ -46,8 +48,14 @@ export function fetchSignals(opts?: {
   min_score?: number
   market_id?: string
   wallet?: string
+  hours?: number
+  search?: string
 }): Promise<Signal[]> {
   return get<Signal[]>(`${BASE}/signals`, opts)
+}
+
+export function fetchSignalDetail(signalId: string): Promise<Signal & Record<string, unknown>> {
+  return get(`${BASE}/signals/${signalId}`)
 }
 
 export function fetchSignalStats(): Promise<SignalStats> {
@@ -86,6 +94,14 @@ export function fetchMarketSignals(
 
 export function fetchMarketAnomalies(marketId: string): Promise<AnomalyPoint[]> {
   return get<AnomalyPoint[]>(`${BASE}/markets/${marketId}/anomalies`)
+}
+
+export function fetchMarketVPIN(marketId: string, hours = 24): Promise<VPINPoint[]> {
+  return get<VPINPoint[]>(`${BASE}/markets/${marketId}/vpin`, { hours })
+}
+
+export function fetchMarketLambda(marketId: string, hours = 24): Promise<LambdaPoint[]> {
+  return get<LambdaPoint[]>(`${BASE}/markets/${marketId}/lambda`, { hours })
 }
 
 /* ── Wallets ─────────────────────────────────────────────────────────── */

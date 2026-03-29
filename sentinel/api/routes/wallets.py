@@ -172,4 +172,7 @@ async def get_wallet_signals(
 ) -> list[dict]:
     """Signals for a specific wallet."""
     from sentinel.api.routes.signals import list_signals
-    return await list_signals(limit=limit, offset=0, min_score=0, market_id=None, wallet=address)
+    return await list_signals(
+        limit=limit, offset=0, min_score=0,
+        market_id=None, wallet=address, hours=None, search=None,
+    )

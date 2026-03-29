@@ -59,11 +59,15 @@ export default function SignalTable({ signals }: Props) {
                     )}
                   </td>
 
-                  {/* Score badge */}
+                  {/* Score badge (links to signal detail) */}
                   <td className="py-2 px-3">
-                    <span className={`inline-block px-2 py-0.5 rounded-sm font-mono font-medium text-[11px] ${scoreBg(score)}`}>
-                      {score ?? '—'}
-                    </span>
+                    <button
+                      onClick={(e) => { e.stopPropagation(); navigate(`/signal/${s.signal_id}`) }}
+                      className={`inline-block px-2 py-0.5 rounded-sm font-mono font-medium text-[11px] hover:ring-1 hover:ring-neutral-500 transition-all ${scoreBg(score)}`}
+                      title="View signal detail"
+                    >
+                      {score ?? '\u2014'}
+                    </button>
                   </td>
 
                   {/* Market */}

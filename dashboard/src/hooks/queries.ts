@@ -3,12 +3,15 @@
 import { useQuery } from '@tanstack/react-query'
 import {
   fetchSignals,
+  fetchSignalDetail,
   fetchSignalStats,
   fetchMarkets,
   fetchMarketDetail,
   fetchMarketVolume,
   fetchMarketSignals,
   fetchMarketAnomalies,
+  fetchMarketVPIN,
+  fetchMarketLambda,
   fetchWallets,
   fetchWalletProfile,
   fetchWalletTrades,
@@ -26,11 +29,25 @@ import {
 
 const POLL = 10_000 // 10s refresh
 
-export function useSignals(opts?: { min_score?: number; market_id?: string; wallet?: string }) {
+export function useSignals(opts?: {
+  min_score?: number
+  market_id?: string
+  wallet?: string
+  hours?: number
+  search?: string
+}) {
   return useQuery({
     queryKey: ['signals', opts],
     queryFn: () => fetchSignals(opts),
     refetchInterval: POLL,
+  })
+}
+
+export function useSignalDetail(signalId: string) {
+  return useQuery({
+    queryKey: ['signal', signalId],
+    queryFn: () => fetchSignalDetail(signalId),
+    enabled: !!signalId,
   })
 }
 
@@ -86,6 +103,24 @@ export function useMarketAnomalies(marketId: string) {
     queryFn: () => fetchMarketAnomalies(marketId),
     enabled: !!marketId,
     refetchInterval: POLL,
+  })
+}
+
+export function useMarketVPIN(marketId: string) {
+  return useQuery({
+    queryKey: ['market-vpin', marketId],
+    queryFn: () => fetchMarketVPIN(marketId),
+    enabled: !!marketId,
+    refetchInterval: 30_000,
+  })
+}
+
+export function useMarketLambda(marketId: string) {
+  return useQuery({
+    queryKey: ['market-lambda', marketId],
+    queryFn: () => fetchMarketLambda(marketId),
+    enabled: !!marketId,
+    refetchInterval: 30_000,
   })
 }
 
