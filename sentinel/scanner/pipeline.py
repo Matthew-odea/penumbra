@@ -34,6 +34,7 @@ from sentinel.scanner.volume import (
     get_liquidity_cliff,
     get_market_concentration,
     get_ofi_for_market,
+    get_position_signal,
     get_trade_size_percentile,
     get_zscore_5m_for_market,
     get_zscore_for_market,
@@ -234,6 +235,16 @@ class Scanner:
         except Exception as exc:
             logger.debug("Liquidity cliff check failed", market=trade.market_id, error=str(exc))
 
+        # 9. Position accumulation (wallet building a position on this market)
+        position_trade_count = 0
+        if _wallet_known:
+            try:
+                pos = get_position_signal(self._conn, trade.wallet, trade.market_id, trade.side)
+                if pos is not None:
+                    position_trade_count = pos[0]
+            except Exception as exc:
+                logger.debug("Position lookup failed", wallet=trade.wallet[:10], error=str(exc))
+
         # Build and score the signal
         signal = build_signal(
             trade_id=trade.trade_id,
@@ -256,6 +267,7 @@ class Scanner:
             market_concentration=market_concentration,
             coordination_wallet_count=coordination_wallet_count,
             liquidity_cliff=liquidity_cliff,
+            position_trade_count=position_trade_count,
         )
 
         if signal.statistical_score < settings.signal_min_score:

@@ -339,3 +339,28 @@ def get_hours_to_resolution(conn: Any, market_id: str, trade_timestamp: Any) -> 
     if delta_seconds <= 0:
         return None  # Market already resolved
     return int(delta_seconds / 3600)
+
+
+# ── Position Accumulation ─────────────────────────────────────────────────
+
+_POSITION_SQL = """
+SELECT trade_count, trades_per_hour
+FROM v_wallet_positions
+WHERE wallet = ?
+  AND market_id = ?
+  AND side = ?
+"""
+
+
+def get_position_signal(
+    conn: Any, wallet: str, market_id: str, side: str,
+) -> tuple[int, float] | None:
+    """Return (trade_count, trades_per_hour) if wallet is building a position.
+
+    Returns None if the wallet has fewer than 3 trades on this market+side
+    in the last 7 days (the view's HAVING clause filters these out).
+    """
+    row = conn.execute(_POSITION_SQL, [wallet, market_id, side]).fetchone()
+    if not row:
+        return None
+    return int(row[0] or 0), float(row[1] or 0)

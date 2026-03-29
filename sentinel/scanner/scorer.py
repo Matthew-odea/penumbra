@@ -29,6 +29,11 @@ from sentinel.config import settings
 
 logger = structlog.get_logger()
 
+# Increment when the scoring formula changes materially.
+# v1 = original (pre-ad2084b): linear price impact, aligned OFI boost, 60% win-rate cliff
+# v2 = post-ad2084b: log price impact, contrarian OFI, smooth win-rate ramp, trade-size Z modulation
+SCORING_VERSION = 2
+
 
 @dataclass(frozen=True, slots=True)
 class Signal:
@@ -62,6 +67,8 @@ class Signal:
     market_concentration: float = 0.0    # Fraction of wallet's recent trades on this market
     coordination_wallet_count: int = 0   # Distinct wallets in same 5-min window (≥3 = coordinated)
     liquidity_cliff: bool = False        # Spread widened >30% in 10 min before trade
+    scoring_version: int = SCORING_VERSION  # Formula version that produced this score
+    position_trade_count: int = 0        # Wallet's trade count on this market+side (accumulation)
 
     def as_db_tuple(self) -> tuple:
         """Return a tuple matching the DuckDB ``signals`` INSERT order."""
@@ -88,6 +95,8 @@ class Signal:
             self.market_concentration,
             self.coordination_wallet_count,
             self.liquidity_cliff,
+            self.scoring_version,
+            self.position_trade_count,
             self.created_at,
         )
 
@@ -129,6 +138,7 @@ def compute_statistical_score(
     size_usd: float | None = None,
     liquidity_cliff: bool = False,
     coordination_wallet_count: int = 0,
+    position_trade_count: int = 0,
 ) -> int:
     """Weighted composite score (0-100) for passing to the Judge.
 
@@ -231,6 +241,14 @@ def compute_statistical_score(
     ):
         score += 5
 
+    # ── Position accumulation bonus ────────────────────────────────────
+    # Multiple trades same wallet + market + side in a short window
+    # indicates deliberate position building, not one-off speculation.
+    if position_trade_count >= 5:
+        score += 5
+    elif position_trade_count >= 3:
+        score += 3
+
     # ── Time-to-resolution urgency multiplier ────────────────────────────
     # Trades closest to resolution contain the most information (Kyle 1985)
     if hours_to_resolution is not None:
@@ -279,6 +297,7 @@ def build_signal(
     market_concentration: float = 0.0,
     coordination_wallet_count: int = 0,
     liquidity_cliff: bool = False,
+    position_trade_count: int = 0,
 ) -> Signal:
     """Construct a scored ``Signal`` from individual metrics."""
     stat_score = compute_statistical_score(
@@ -296,6 +315,7 @@ def build_signal(
         size_usd=size_usd,
         liquidity_cliff=liquidity_cliff,
         coordination_wallet_count=coordination_wallet_count,
+        position_trade_count=position_trade_count,
     )
 
     return Signal(
@@ -320,6 +340,8 @@ def build_signal(
         market_concentration=market_concentration,
         coordination_wallet_count=coordination_wallet_count,
         liquidity_cliff=liquidity_cliff,
+        scoring_version=SCORING_VERSION,
+        position_trade_count=position_trade_count,
         statistical_score=stat_score,
         created_at=datetime.now(tz=UTC),
     )
@@ -334,8 +356,9 @@ INSERT OR IGNORE INTO signals (
     wallet_win_rate, wallet_total_trades, is_whitelisted,
     funding_anomaly, funding_age_minutes, statistical_score,
     ofi_score, hours_to_resolution, market_concentration,
-    coordination_wallet_count, liquidity_cliff, created_at
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    coordination_wallet_count, liquidity_cliff,
+    scoring_version, position_trade_count, created_at
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 """
 
 

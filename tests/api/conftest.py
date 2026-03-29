@@ -91,7 +91,7 @@ def _seed(conn: duckdb.DuckDBPyConnection) -> None:
             """
             INSERT INTO signals VALUES
                 (?, ?, ?, ?, 'BUY', 0.65, 5000.0, ?,
-                 3.5, 2.1, 0.03, 0.72, 15, FALSE, FALSE, NULL, ?, ?, ?, ?, 0, FALSE, ?)
+                 3.5, 2.1, 0.03, 0.72, 15, FALSE, FALSE, NULL, ?, ?, ?, ?, 0, FALSE, 2, 0, ?)
             """,
             [sid, tid, mid, wallet, base_time + timedelta(minutes=i * 15), score, 0.0, None, 0.0, now],
         )

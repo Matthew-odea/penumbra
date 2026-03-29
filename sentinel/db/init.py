@@ -112,6 +112,9 @@ CREATE TABLE IF NOT EXISTS signals (
     -- Detection improvements (sprint 5)
     coordination_wallet_count INTEGER DEFAULT 0,     -- Distinct wallets in same 5-min window
     liquidity_cliff     BOOLEAN DEFAULT FALSE,        -- Spread widened >30% in 10 min before trade
+    -- Scoring metadata
+    scoring_version     INTEGER,                      -- Formula version (1=pre-fix, 2=post-fix)
+    position_trade_count INTEGER DEFAULT 0,           -- Wallet's trade count on this market+side
     created_at          TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -364,6 +367,29 @@ LEFT JOIN signal_reasoning sr ON s.signal_id = sr.signal_id
 JOIN markets m ON s.market_id = m.market_id
 WHERE m.resolved = TRUE
   AND m.resolved_price IS NOT NULL;
+
+-- Wallet position accumulation: detects wallets building positions
+-- (multiple trades on the same market+side in a rolling 7-day window).
+CREATE OR REPLACE VIEW v_wallet_positions AS
+SELECT
+    wallet,
+    market_id,
+    side,
+    COUNT(*) AS trade_count,
+    SUM(size_usd) AS total_volume_usd,
+    MIN(timestamp) AS first_trade,
+    MAX(timestamp) AS last_trade,
+    EXTRACT(EPOCH FROM MAX(timestamp) - MIN(timestamp)) / 3600.0 AS span_hours,
+    CASE
+        WHEN EXTRACT(EPOCH FROM MAX(timestamp) - MIN(timestamp)) > 0
+        THEN COUNT(*) / (EXTRACT(EPOCH FROM MAX(timestamp) - MIN(timestamp)) / 3600.0)
+        ELSE NULL
+    END AS trades_per_hour
+FROM v_deduped_trades
+WHERE wallet != ''
+  AND timestamp >= CURRENT_TIMESTAMP - INTERVAL '7 days'
+GROUP BY wallet, market_id, side
+HAVING COUNT(*) >= 3;
 """
 
 
@@ -458,6 +484,18 @@ def init_schema(db_path: Path | None = None) -> duckdb.DuckDBPyConnection:
     if "token_ids" not in mkt_cols:
         conn.execute("ALTER TABLE markets ADD COLUMN token_ids VARCHAR")
         logger.info("Migration: added 'token_ids' column to markets table")
+
+    # v011: scoring version tracking — distinguishes pre-fix (v1) from post-fix (v2) scores
+    if "scoring_version" not in sig_cols:
+        conn.execute("ALTER TABLE signals ADD COLUMN scoring_version INTEGER")
+        conn.execute("UPDATE signals SET scoring_version = 1 WHERE scoring_version IS NULL")
+        logger.info("Migration: added 'scoring_version' column to signals table")
+
+    # v012: position accumulation tracking
+    if "position_trade_count" not in sig_cols:
+        conn.execute("ALTER TABLE signals ADD COLUMN position_trade_count INTEGER")
+        conn.execute("UPDATE signals SET position_trade_count = 0 WHERE position_trade_count IS NULL")
+        logger.info("Migration: added 'position_trade_count' column to signals table")
 
     # Force WAL checkpoint so all schema changes are flushed to the .duckdb
     # file before this function returns.  Without this, if the process is

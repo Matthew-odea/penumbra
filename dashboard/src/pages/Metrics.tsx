@@ -21,6 +21,8 @@ import {
   useBudget,
   useIngestion,
   useMetricsAccuracy,
+  useAccuracySummary,
+  useAccuracyCalibration,
   useMetricsPatterns,
 } from '../hooks/queries'
 import { fmtNum } from '../lib/format'
@@ -41,6 +43,8 @@ export default function Metrics() {
   const { data: budget } = useBudget()
   const { data: ingestion } = useIngestion()
   const { data: accuracy = [] } = useMetricsAccuracy()
+  const { data: accSummary } = useAccuracySummary()
+  const { data: calibration = [] } = useAccuracyCalibration()
   const { data: patterns = [] } = useMetricsPatterns()
   const navigate = useNavigate()
 
@@ -625,7 +629,105 @@ export default function Metrics() {
         )}
       </div>
 
-      {/* ── Row 5: Classification Accuracy (Resolved Markets) ────── */}
+      {/* ── Row 5a: Accuracy Summary (Precision / Recall / F1) ───── */}
+      {accSummary && accSummary.total_evaluated > 0 && (
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+          <div className="bg-surface-1 border border-border-subtle rounded-sm px-4 py-3">
+            <div className="text-[11px] uppercase tracking-wider text-neutral-500 mb-1">Precision</div>
+            <div className={`font-mono text-lg font-medium ${
+              accSummary.precision != null && accSummary.precision >= 0.6 ? 'text-emerald-400'
+              : accSummary.precision != null && accSummary.precision >= 0.3 ? 'text-amber-400'
+              : 'text-red-400'
+            }`}>
+              {accSummary.precision != null ? `${(accSummary.precision * 100).toFixed(1)}%` : '—'}
+            </div>
+            <div className="text-[11px] text-neutral-600 mt-0.5">TP / (TP + FP)</div>
+          </div>
+          <div className="bg-surface-1 border border-border-subtle rounded-sm px-4 py-3">
+            <div className="text-[11px] uppercase tracking-wider text-neutral-500 mb-1">Recall</div>
+            <div className={`font-mono text-lg font-medium ${
+              accSummary.recall != null && accSummary.recall >= 0.6 ? 'text-emerald-400'
+              : accSummary.recall != null && accSummary.recall >= 0.3 ? 'text-amber-400'
+              : 'text-red-400'
+            }`}>
+              {accSummary.recall != null ? `${(accSummary.recall * 100).toFixed(1)}%` : '—'}
+            </div>
+            <div className="text-[11px] text-neutral-600 mt-0.5">TP / (TP + FN)</div>
+          </div>
+          <div className="bg-surface-1 border border-border-subtle rounded-sm px-4 py-3">
+            <div className="text-[11px] uppercase tracking-wider text-neutral-500 mb-1">F1 Score</div>
+            <div className={`font-mono text-lg font-medium ${
+              accSummary.f1_score != null && accSummary.f1_score >= 0.5 ? 'text-emerald-400'
+              : accSummary.f1_score != null && accSummary.f1_score >= 0.25 ? 'text-amber-400'
+              : 'text-red-400'
+            }`}>
+              {accSummary.f1_score != null ? accSummary.f1_score.toFixed(3) : '—'}
+            </div>
+            <div className="text-[11px] text-neutral-600 mt-0.5">Harmonic mean</div>
+          </div>
+          <div className="bg-surface-1 border border-border-subtle rounded-sm px-4 py-3">
+            <div className="text-[11px] uppercase tracking-wider text-neutral-500 mb-1">Confusion Matrix</div>
+            <div className="grid grid-cols-2 gap-x-3 gap-y-0.5 text-xs font-mono mt-1">
+              <span className="text-emerald-400">TP {accSummary.true_positives}</span>
+              <span className="text-red-400">FP {accSummary.false_positives}</span>
+              <span className="text-amber-400">FN {accSummary.false_negatives}</span>
+              <span className="text-neutral-400">TN {accSummary.true_negatives}</span>
+            </div>
+            <div className="text-[11px] text-neutral-600 mt-0.5">{accSummary.total_evaluated} resolved signals</div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Row 5b: Calibration — Accuracy by Score Bucket ────────── */}
+      {calibration.length > 0 && (
+        <div className="bg-surface-1 border border-border-subtle rounded-sm p-4">
+          <div className="text-[11px] uppercase tracking-wider text-neutral-500 mb-3">
+            Calibration — Accuracy by Score Bucket
+          </div>
+          <div className="h-44">
+            <ResponsiveContainer width="100%" height="100%">
+              <BarChart data={calibration} margin={{ top: 4, right: 16, bottom: 0, left: 0 }}>
+                <CartesianGrid strokeDasharray="3 3" stroke="#1e1e1e" vertical={false} />
+                <XAxis dataKey="score_bucket" tick={{ fill: '#525252', fontSize: 10 }} />
+                <YAxis tick={{ fill: '#525252', fontSize: 10 }} domain={[0, 100]} unit="%" />
+                <Tooltip
+                  contentStyle={{
+                    background: '#191919',
+                    border: '1px solid #2a2a2a',
+                    borderRadius: '3px',
+                    fontSize: '11px',
+                    color: '#d4d4d4',
+                  }}
+                  formatter={(value: number, name: string) =>
+                    name === 'accuracy_pct' ? [`${value?.toFixed(1)}%`, 'Accuracy'] : [value, name]
+                  }
+                />
+                <Bar dataKey="accuracy_pct" name="accuracy_pct" fill="#f59e0b">
+                  {calibration.map((entry, index) => (
+                    <Cell
+                      key={index}
+                      fill={
+                        entry.accuracy_pct != null && entry.accuracy_pct >= 60 ? '#10b981'
+                        : entry.accuracy_pct != null && entry.accuracy_pct >= 40 ? '#f59e0b'
+                        : '#ef4444'
+                      }
+                    />
+                  ))}
+                </Bar>
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
+          <div className="flex gap-6 mt-2 text-[10px] text-neutral-500">
+            {calibration.map((b) => (
+              <span key={b.score_bucket}>
+                {b.score_bucket}: {b.correct}/{b.total} signals
+              </span>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* ── Row 5c: Classification Accuracy (Resolved Markets) ────── */}
       {accuracy.length > 0 && (
         <div className="bg-surface-1 border border-border-subtle rounded-sm">
           <div className="px-4 py-3 border-b border-border-subtle flex items-center justify-between">

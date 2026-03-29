@@ -248,3 +248,23 @@ export interface IngestionHourly {
   bucket: string
   trades: number
 }
+
+export interface AccuracySummary {
+  true_positives: number
+  false_positives: number
+  false_negatives: number
+  true_negatives: number
+  total_evaluated: number
+  precision: number | null
+  recall: number | null
+  f1_score: number | null
+}
+
+export interface CalibrationBucket {
+  score_bucket: string
+  total: number
+  correct: number
+  accuracy_pct: number | null
+  predicted_informed: number
+  true_positives: number
+}

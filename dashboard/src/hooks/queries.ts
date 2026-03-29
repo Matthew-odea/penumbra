@@ -19,6 +19,8 @@ import {
   fetchTimeseries,
   fetchMetricsOverview,
   fetchMetricsAccuracy,
+  fetchAccuracySummary,
+  fetchAccuracyCalibration,
   fetchMetricsPatterns,
   fetchIngestion,
 } from '../api/client'
@@ -165,6 +167,22 @@ export function useMetricsAccuracy() {
   return useQuery({
     queryKey: ['metrics-accuracy'],
     queryFn: fetchMetricsAccuracy,
+    refetchInterval: 60_000,
+  })
+}
+
+export function useAccuracySummary() {
+  return useQuery({
+    queryKey: ['accuracy-summary'],
+    queryFn: fetchAccuracySummary,
+    refetchInterval: 60_000,
+  })
+}
+
+export function useAccuracyCalibration() {
+  return useQuery({
+    queryKey: ['accuracy-calibration'],
+    queryFn: fetchAccuracyCalibration,
     refetchInterval: 60_000,
   })
 }

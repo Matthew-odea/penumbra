@@ -16,6 +16,8 @@ import type {
   TimeseriesPoint,
   MetricsOverview,
   MarketAccuracy,
+  AccuracySummary,
+  CalibrationBucket,
   HourPattern,
   IngestionMetrics,
 } from './types'
@@ -146,6 +148,14 @@ export function fetchMetricsAccuracy(): Promise<MarketAccuracy[]> {
 
 export function fetchMetricsPatterns(): Promise<HourPattern[]> {
   return get<HourPattern[]>(`${BASE}/metrics/patterns`)
+}
+
+export function fetchAccuracySummary(): Promise<AccuracySummary> {
+  return get<AccuracySummary>(`${BASE}/metrics/accuracy/summary`)
+}
+
+export function fetchAccuracyCalibration(): Promise<CalibrationBucket[]> {
+  return get<CalibrationBucket[]>(`${BASE}/metrics/accuracy/calibration`)
 }
 
 export function fetchIngestion(): Promise<IngestionMetrics> {
