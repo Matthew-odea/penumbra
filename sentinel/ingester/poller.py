@@ -41,7 +41,7 @@ _SSL_CTX.verify_mode = ssl.CERT_NONE
 # Bounded LRU seen-set to avoid reprocessing recent trades.
 # The REST API returns the most recent N trades per market (not just new ones),
 # so the set must hold IDs across many poll cycles without evicting.
-# 500K holds ~10 full cycles (50 markets × 1000 trades × 10 cycles).
+# 500K holds ~5 full cycles (100 markets x 1000 trades x 5 cycles).
 _SEEN_SET_MAX = 500_000
 
 
@@ -53,7 +53,10 @@ class _BoundedSet:
         self._maxlen = maxlen
 
     def __contains__(self, key: str) -> bool:
-        return key in self._data
+        if key in self._data:
+            self._data.move_to_end(key)
+            return True
+        return False
 
     def add(self, key: str) -> None:
         if key in self._data:
