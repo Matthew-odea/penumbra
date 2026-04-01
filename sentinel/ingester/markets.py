@@ -357,6 +357,7 @@ async def sync_resolutions(conn: Any, *, base_url: str | None = None) -> int:
         WHERE m.active = false
           AND m.resolved = false
           AND m.resolved_price IS NULL
+          AND m.last_synced >= CURRENT_TIMESTAMP - INTERVAL '30 days'
           AND EXISTS (SELECT 1 FROM signals s WHERE s.market_id = m.market_id)
         LIMIT 50
         """
