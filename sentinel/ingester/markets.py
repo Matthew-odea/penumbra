@@ -82,10 +82,10 @@ async def fetch_all_markets(
     *,
     base_url: str | None = None,
 ) -> list[dict[str, Any]]:
-    """Page through ``/markets`` and return all non-archived markets.
+    """Page through ``/markets`` and return active (non-closed) markets.
 
-    Includes both active and closed (resolved) markets so that resolution
-    outcomes are synced into the DB for accuracy measurement.
+    Closed/archived markets are skipped — resolution data for markets we
+    already track is handled by ``sync_resolutions()`` instead.
 
     Args:
         base_url: Override for the REST URL (tests / dry-run).
@@ -109,7 +109,7 @@ async def fetch_all_markets(
             page += 1
 
             for m in body.get("data", []):
-                if m.get("archived"):
+                if not m.get("active") or m.get("closed") or m.get("archived"):
                     continue
                 markets.append(m)
 
@@ -336,7 +336,58 @@ async def sync_markets(conn: Any, *, base_url: str | None = None) -> int:
         if deactivated:
             logger.info("Deactivated unlisted markets", count=deactivated)
 
+    # Resolve markets that disappeared from the active set
+    await sync_resolutions(conn, base_url=base_url)
+
     return count
+
+
+async def sync_resolutions(conn: Any, *, base_url: str | None = None) -> int:
+    """Fetch resolution data for markets that were deactivated but lack resolved_price.
+
+    Queries the Polymarket API for each unresolved-but-inactive market to check
+    if it has closed and extract the outcome.  This is a targeted pass — typically
+    only a handful of markets per sync cycle.
+
+    Returns the number of markets resolved.
+    """
+    rows = conn.execute(
+        """
+        SELECT m.market_id FROM markets m
+        WHERE m.active = false
+          AND m.resolved = false
+          AND m.resolved_price IS NULL
+          AND EXISTS (SELECT 1 FROM signals s WHERE s.market_id = m.market_id)
+        LIMIT 50
+        """
+    ).fetchall()
+
+    if not rows:
+        return 0
+
+    resolved_count = 0
+    for (market_id,) in rows:
+        try:
+            m = await fetch_market_by_id(market_id, base_url=base_url)
+            if m is None:
+                continue
+            if not m.get("closed"):
+                continue
+
+            tokens = m.get("tokens") or []
+            resolved_price = _extract_resolved_price(tokens)
+            if resolved_price is not None:
+                conn.execute(
+                    "UPDATE markets SET resolved = true, resolved_price = ? WHERE market_id = ?",
+                    [resolved_price, market_id],
+                )
+                resolved_count += 1
+        except Exception as exc:
+            logger.debug("Resolution check failed", market=market_id[:16], error=str(exc))
+
+    if resolved_count:
+        logger.info("Markets resolved", count=resolved_count)
+    return resolved_count
 
 
 def get_priority_market_ids(
