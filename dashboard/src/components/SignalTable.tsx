@@ -40,7 +40,7 @@ export default function SignalTable({ signals }: Props) {
           {signals.map((s) => {
             const score = s.statistical_score
             const isExpanded = expanded === s.signal_id
-            const hasDetail = !!(s.explanation || s.attractiveness_reason)
+            const hasDetail = true
 
             return (
               <Fragment key={s.signal_id}>
@@ -104,13 +104,17 @@ export default function SignalTable({ signals }: Props) {
 
                   {/* Wallet */}
                   <td className="py-2 px-3">
-                    <button
-                      onClick={(e) => { e.stopPropagation(); navigate(`/wallet/${s.wallet}`) }}
-                      className="font-mono text-neutral-400 hover:text-accent transition-colors"
-                      title={s.wallet}
-                    >
-                      {truncAddr(s.wallet)}
-                    </button>
+                    {s.wallet ? (
+                      <button
+                        onClick={(e) => { e.stopPropagation(); navigate(`/wallet/${s.wallet}`) }}
+                        className="font-mono text-neutral-400 hover:text-accent transition-colors"
+                        title={s.wallet}
+                      >
+                        {truncAddr(s.wallet)}
+                      </button>
+                    ) : (
+                      <span className="text-neutral-600 text-[10px]">WS</span>
+                    )}
                   </td>
 
                   {/* Side */}

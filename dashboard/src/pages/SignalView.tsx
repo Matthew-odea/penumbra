@@ -253,13 +253,17 @@ export default function SignalView() {
           <span>Size: <span className="text-neutral-300 font-mono">{fmtUsd(s.size_usd)}</span></span>
           <span>
             Wallet:{' '}
-            <Link
-              to={`/wallet/${s.wallet}`}
-              className="font-mono text-neutral-400 hover:text-accent transition-colors"
-              title={s.wallet}
-            >
-              {truncAddr(s.wallet)}
-            </Link>
+            {s.wallet ? (
+              <Link
+                to={`/wallet/${s.wallet}`}
+                className="font-mono text-neutral-400 hover:text-accent transition-colors"
+                title={s.wallet}
+              >
+                {truncAddr(s.wallet)}
+              </Link>
+            ) : (
+              <span className="text-neutral-600">unknown (WS trade)</span>
+            )}
           </span>
           <span className="text-neutral-600">{timeAgo(s.created_at)}</span>
         </div>
@@ -297,12 +301,24 @@ export default function SignalView() {
         >
           View Market Detail
         </Link>
-        <Link
-          to={`/wallet/${s.wallet}`}
-          className="px-3 py-1.5 bg-surface-2 border border-border-subtle rounded-sm text-neutral-400 hover:text-neutral-200 transition-colors"
-        >
-          View Wallet Profile
-        </Link>
+        {s.wallet && (
+          <Link
+            to={`/wallet/${s.wallet}`}
+            className="px-3 py-1.5 bg-surface-2 border border-border-subtle rounded-sm text-neutral-400 hover:text-neutral-200 transition-colors"
+          >
+            View Wallet Profile
+          </Link>
+        )}
+        {String((s as Record<string, unknown>).tx_hash ?? '') !== '' && (
+          <a
+            href={`https://polygonscan.com/tx/${String((s as Record<string, unknown>).tx_hash)}`}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="px-3 py-1.5 bg-surface-2 border border-border-subtle rounded-sm text-neutral-400 hover:text-neutral-200 transition-colors"
+          >
+            View on Polygonscan
+          </a>
+        )}
       </div>
     </div>
   )

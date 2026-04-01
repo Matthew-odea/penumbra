@@ -22,9 +22,9 @@ export default function SummaryCards({ stats, budget }: Props) {
       accent: (stats?.high_suspicion_today ?? 0) > 0,
     },
     {
-      label: 'Active Markets',
+      label: 'Markets w/ Signals',
       value: fmtNum(stats?.active_markets),
-      sub: null,
+      sub: 'today',
     },
     {
       label: 'Scoring Budget',

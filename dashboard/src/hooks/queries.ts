@@ -137,6 +137,7 @@ export function useWalletProfile(address: string) {
     queryKey: ['wallet', address],
     queryFn: () => fetchWalletProfile(address),
     enabled: !!address,
+    refetchInterval: 30_000,
   })
 }
 
@@ -145,6 +146,7 @@ export function useWalletTrades(address: string) {
     queryKey: ['wallet-trades', address],
     queryFn: () => fetchWalletTrades(address),
     enabled: !!address,
+    refetchInterval: 30_000,
   })
 }
 

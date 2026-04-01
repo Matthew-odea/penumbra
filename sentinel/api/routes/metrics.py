@@ -387,7 +387,7 @@ async def accuracy_calibration() -> list[dict]:
     rows = db.execute("""
         SELECT
             CASE
-                WHEN statistical_score < 40 THEN '30-39'
+                WHEN statistical_score < 40 THEN '<40'
                 WHEN statistical_score < 60 THEN '40-59'
                 WHEN statistical_score < 80 THEN '60-79'
                 ELSE '80+'

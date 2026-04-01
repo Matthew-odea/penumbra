@@ -531,7 +531,12 @@ export default function Metrics() {
       </div>
 
       {/* ── Row 5a: Accuracy Summary (Precision / Recall / F1) ───── */}
-      {accSummary && accSummary.total_evaluated > 0 && (
+      {accSummary && accSummary.total_evaluated > 0 && (<>
+        <div className="bg-amber-500/5 border border-amber-500/20 rounded-sm px-4 py-2.5 text-[11px] text-amber-400/80 leading-relaxed">
+          <span className="font-semibold">Accuracy caveat:</span> These metrics measure whether high-score signals predicted the
+          correct market outcome (BUY on YES resolution = correct). This is a proxy for informed trading, not proof &mdash; a
+          profitable trade may be lucky, and an insider trade may lose. Treat as directional signal quality, not ground truth.
+        </div>
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
           <div className="bg-surface-1 border border-border-subtle rounded-sm px-4 py-3">
             <div className="text-[11px] uppercase tracking-wider text-neutral-500 mb-1">Precision</div>
@@ -577,7 +582,7 @@ export default function Metrics() {
             <div className="text-[11px] text-neutral-600 mt-0.5">{accSummary.total_evaluated} resolved signals</div>
           </div>
         </div>
-      )}
+      </>)}
 
       {/* ── Row 5b: Calibration — Accuracy by Score Bucket ────────── */}
       {calibration.length > 0 && (
