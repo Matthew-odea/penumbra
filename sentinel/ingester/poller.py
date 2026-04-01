@@ -104,6 +104,7 @@ class TradePoller:
         self._poll_count = 0
         self._running = False
         self._seen = _BoundedSet()
+        self._market_max_ts: dict[str, float] = {}  # condition_id → max epoch seen
 
     # ── public API ──────────────────────────────────────────────────────
 
@@ -222,6 +223,9 @@ class TradePoller:
                 )
                 return 0, 0
 
+            max_ts = self._market_max_ts.get(condition_id, 0.0)
+            batch_max_ts = max_ts
+
             for raw_event in events:
                 if not isinstance(raw_event, dict):
                     continue
@@ -231,14 +235,25 @@ class TradePoller:
                     continue
 
                 total_fetched += 1
+                trade_epoch = trade.timestamp.timestamp()
+
+                # Skip trades at or before the last seen timestamp for this market.
+                # Handles the sliding-window problem: high-volume markets rotate
+                # their "newest 1000" each cycle, producing false "new" trades.
+                if trade_epoch <= max_ts:
+                    continue
 
                 if trade.trade_id in self._seen:
                     continue
 
+                batch_max_ts = max(batch_max_ts, trade_epoch)
                 self._seen.add(trade.trade_id)
                 self._trade_count += 1
                 new_count += 1
                 await self._on_trade(trade)
+
+            if batch_max_ts > max_ts:
+                self._market_max_ts[condition_id] = batch_max_ts
 
             if new_count > 0:
                 logger.debug(

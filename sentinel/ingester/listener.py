@@ -201,10 +201,27 @@ class Listener:
                     assets=len(self._asset_ids) or "none",
                 )
 
-                async for raw in ws:
-                    if not self._running:
-                        break
-                    await self._handle_message(raw)
+                last_data = asyncio.get_event_loop().time()
+
+                async def _watchdog() -> None:
+                    """Close WS if no data received for 60s."""
+                    while self._running:
+                        await asyncio.sleep(15)
+                        idle = asyncio.get_event_loop().time() - last_data
+                        if idle > 60:
+                            logger.warning("WS data stall — forcing reconnect", idle_s=round(idle))
+                            await ws.close()
+                            return
+
+                watchdog = asyncio.create_task(_watchdog())
+                try:
+                    async for raw in ws:
+                        if not self._running:
+                            break
+                        last_data = asyncio.get_event_loop().time()
+                        await self._handle_message(raw)
+                finally:
+                    watchdog.cancel()
             finally:
                 self._ws = None
 
