@@ -324,7 +324,7 @@ async def sync_markets(conn: Any, *, base_url: str | None = None) -> int:
     if len(synced_ids) > 50:
         synced_list = list(synced_ids)
         placeholders = ",".join("?" * len(synced_list))
-        deactivated = conn.execute(
+        conn.execute(
             f"""
             UPDATE markets
             SET active = false
@@ -332,7 +332,11 @@ async def sync_markets(conn: Any, *, base_url: str | None = None) -> int:
               AND market_id NOT IN ({placeholders})
             """,
             synced_list,
-        ).rowcount
+        )
+        deactivated = conn.execute(
+            f"SELECT COUNT(*) FROM markets WHERE active = false AND market_id NOT IN ({placeholders})",
+            synced_list,
+        ).fetchone()[0]
         if deactivated:
             logger.info("Deactivated unlisted markets", count=deactivated)
 

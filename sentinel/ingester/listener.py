@@ -38,7 +38,6 @@ BookEventCallback = Callable[[BookEvent], Coroutine[Any, Any, None]]
 # Reconnection parameters
 _INITIAL_BACKOFF = 1.0  # seconds
 _MAX_BACKOFF = 15.0     # reduced from 60s — longer gaps lose more trades
-_MAX_RETRIES = 50       # effectively unlimited with backoff
 
 # Lenient SSL context — Polymarket CDN cert can mismatch behind VPN/geo-fence
 _SSL_CTX = ssl.create_default_context()
@@ -88,9 +87,9 @@ class Listener:
         """Connect and listen in a loop with exponential backoff."""
         self._running = True
         backoff = _INITIAL_BACKOFF
-        retries = 0
 
-        while self._running and retries < _MAX_RETRIES:
+        while self._running:
+            connected_at = asyncio.get_event_loop().time()
             try:
                 await self._connect_and_listen()
                 # Clean exit (e.g. cancelled) — don't retry.
@@ -99,33 +98,27 @@ class Listener:
                 logger.info("Listener cancelled")
                 break
             except Exception as exc:
-                retries += 1
                 self._reconnect_count += 1
+                uptime = asyncio.get_event_loop().time() - connected_at
                 logger.warning(
                     "WS disconnected — reconnecting",
                     error=str(exc),
-                    retry=retries,
                     backoff_s=backoff,
+                    uptime_s=round(uptime, 1),
                     total_reconnects=self._reconnect_count,
                 )
                 await asyncio.sleep(backoff)
-                backoff = min(backoff * 2, _MAX_BACKOFF)
 
-                # After reconnect, fire callback so the poller can backfill
-                # any trades missed during the gap.
+                # If connection lasted >30s, it was a transient drop — reset backoff.
+                # Otherwise escalate (rapid-fire failures like auth/size errors).
+                backoff = _INITIAL_BACKOFF if uptime > 30 else min(backoff * 2, _MAX_BACKOFF)
+
+                # Fire callback so the poller can backfill trades missed during the gap.
                 if self._on_reconnect is not None:
                     try:
                         await self._on_reconnect()
                     except Exception as cb_exc:
                         logger.warning("on_reconnect callback failed", error=str(cb_exc))
-
-                # Reset backoff on successful reconnection (next iteration
-                # will call _connect_and_listen — if it succeeds, great;
-                # if it fails immediately, backoff restarts from 1s).
-                backoff = _INITIAL_BACKOFF
-
-        if retries >= _MAX_RETRIES:
-            logger.error("Max WS retries exceeded — giving up")
 
     def stop(self) -> None:
         """Signal the listener to stop after the current iteration."""
@@ -198,6 +191,7 @@ class Listener:
             ping_interval=20,
             ping_timeout=20,
             close_timeout=10,
+            max_size=10 * 1024 * 1024,  # 10 MB — Polymarket sends >1 MB with 100+ assets
         ) as ws:
             self._ws = ws
             try:
