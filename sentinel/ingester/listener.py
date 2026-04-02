@@ -177,6 +177,46 @@ class Listener:
                 total_assets=len(self._asset_ids),
             )
 
+    async def set_subscriptions(self, new_asset_ids: list[str]) -> None:
+        """Replace the subscription list with new_asset_ids (hot-tier refresh).
+
+        Unlike ``update_subscriptions``, this *replaces* ``_asset_ids`` so that
+        stale markets are dropped on the next reconnect.  On an active
+        connection, only genuinely new IDs are sent as a subscribe message
+        (Polymarket WS has no unsubscribe command, so already-subscribed
+        channels stay active until reconnect).
+        """
+        novel = [aid for aid in new_asset_ids if aid not in set(self._asset_ids)]
+        self._asset_ids = list(new_asset_ids)  # replace, not extend
+        if not novel:
+            logger.debug(
+                "WS subscriptions replaced — no new assets",
+                total_assets=len(self._asset_ids),
+            )
+            return
+        if self._ws is not None:
+            payload = {
+                "auth": {},
+                "type": "subscribe",
+                "markets": [],
+                "assets_ids": novel,
+            }
+            try:
+                await self._ws.send(json.dumps(payload))
+                logger.info(
+                    "WS subscriptions replaced",
+                    new_assets=len(novel),
+                    total_assets=len(self._asset_ids),
+                )
+            except Exception as exc:
+                logger.warning("WS subscription replace failed", error=str(exc))
+        else:
+            logger.debug(
+                "WS not connected — subscription list replaced for next connect",
+                new_assets=len(novel),
+                total_assets=len(self._asset_ids),
+            )
+
     # ── internals ───────────────────────────────────────────────────────
 
     async def _connect_and_listen(self) -> None:

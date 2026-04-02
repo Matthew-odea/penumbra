@@ -279,14 +279,19 @@ async def _periodic_hot_market_refresh(
         try:
             new_ids = get_priority_market_ids(conn)  # type: ignore[arg-type]
             poller.update_markets(new_ids)
-            logger.info("Hot market list refreshed from priority formula", count=len(new_ids))
 
-            # Update WS subscription for new hot-tier markets
-            if new_ids:
-                placeholders = ",".join("?" * len(new_ids))
+            ws_ids = get_priority_market_ids(conn, limit=settings.ws_market_count)  # type: ignore[arg-type]
+            logger.info(
+                "Hot market list refreshed from priority formula",
+                rest_markets=len(new_ids),
+                ws_markets=len(ws_ids),
+            )
+
+            if ws_ids:
+                placeholders = ",".join("?" * len(ws_ids))
                 rows = conn.execute(  # type: ignore[attr-defined]
                     f"SELECT token_ids FROM markets WHERE market_id IN ({placeholders}) AND token_ids IS NOT NULL",
-                    new_ids,
+                    ws_ids,
                 ).fetchall()
                 new_asset_ids = [
                     tid
@@ -296,7 +301,7 @@ async def _periodic_hot_market_refresh(
                     if tid
                 ]
                 if new_asset_ids:
-                    await listener.update_subscriptions(new_asset_ids)
+                    await listener.set_subscriptions(new_asset_ids)
         except Exception as exc:
             logger.warning("Hot market refresh failed", error=str(exc))
 
@@ -467,28 +472,31 @@ async def run_ingester(
         else:
             logger.warning("Initial market sync failed after retries — continuing with stale data")
 
-        # 3. Now that we have the full DB, build the initial hot tier from priority formula
-        #    Update BOTH the REST poller and WS listener to use the same market set.
+        # 3. Now that we have the full DB, build the initial hot tier from priority formula.
+        #    REST poller uses hot_market_count (100); WS subscribes to ws_market_count (500).
         try:
             priority_ids = get_priority_market_ids(conn)
             if priority_ids:
                 poller.update_markets(priority_ids)
-                # Subscribe WS to the priority markets' token IDs
-                placeholders = ",".join("?" * len(priority_ids))
+
+            ws_ids = get_priority_market_ids(conn, limit=settings.ws_market_count)
+            if ws_ids:
+                placeholders = ",".join("?" * len(ws_ids))
                 rows = conn.execute(
                     f"SELECT token_ids FROM markets WHERE market_id IN ({placeholders}) AND token_ids IS NOT NULL",
-                    priority_ids,
+                    ws_ids,
                 ).fetchall()
-                priority_asset_ids = [
+                ws_asset_ids = [
                     tid for row in rows if row[0]
                     for tid in row[0].split(",") if tid
                 ]
-                if priority_asset_ids:
-                    await listener.update_subscriptions(priority_asset_ids)
+                if ws_asset_ids:
+                    await listener.set_subscriptions(ws_asset_ids)
                 logger.info(
                     "Initial hot tier from priority formula",
-                    markets=len(priority_ids),
-                    ws_assets=len(priority_asset_ids) if priority_asset_ids else 0,
+                    rest_markets=len(priority_ids) if priority_ids else 0,
+                    ws_markets=len(ws_ids),
+                    ws_assets=len(ws_asset_ids) if ws_asset_ids else 0,
                 )
         except Exception as exc:
             logger.warning("Failed to build initial hot tier from DB", error=str(exc))
