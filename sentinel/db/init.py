@@ -163,16 +163,15 @@ WHERE timestamp >= CURRENT_TIMESTAMP - INTERVAL '7 days'
 GROUP BY 1, 2;
 
 -- Modified Z-Score anomaly detection
+-- Baseline (median/MAD) uses the full 7-day window from v_hourly_volume for
+-- statistical stability.  Only the most recent 2 hours are returned as
+-- detection rows, so the baseline and detection windows are decoupled.
 CREATE OR REPLACE VIEW v_volume_anomalies AS
-WITH hourly AS (
-    SELECT * FROM v_hourly_volume
-    WHERE hour_bucket >= CURRENT_TIMESTAMP - INTERVAL '24 hours'
-),
-market_stats AS (
+WITH market_stats AS (
     SELECT
-        h.market_id,
-        PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY h.volume_usd) AS median_vol
-    FROM hourly h
+        market_id,
+        PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY volume_usd) AS median_vol
+    FROM v_hourly_volume
     GROUP BY 1
 ),
 market_mad AS (
@@ -181,9 +180,13 @@ market_mad AS (
         PERCENTILE_CONT(0.5) WITHIN GROUP (
             ORDER BY ABS(h.volume_usd - ms.median_vol)
         ) AS mad_vol
-    FROM hourly h
+    FROM v_hourly_volume h
     JOIN market_stats ms ON h.market_id = ms.market_id
     GROUP BY 1
+),
+recent AS (
+    SELECT * FROM v_hourly_volume
+    WHERE hour_bucket >= CURRENT_TIMESTAMP - INTERVAL '2 hours'
 )
 SELECT
     h.market_id,
@@ -198,7 +201,7 @@ SELECT
         THEN 0.6745 * (h.volume_usd - ms.median_vol) / mm.mad_vol
         ELSE NULL
     END AS modified_z_score
-FROM hourly h
+FROM recent h
 JOIN market_stats ms ON h.market_id = ms.market_id
 JOIN market_mad mm ON h.market_id = mm.market_id;
 
@@ -226,6 +229,7 @@ GROUP BY 1, 2;
 
 -- 5-minute volume per market (for fine-grained Z-score detection)
 -- Uses epoch arithmetic: floor(epoch / 300) * 300 → 5-min bucket boundary
+-- 24-hour window gives 288 buckets per market — enough for a stable baseline.
 CREATE OR REPLACE VIEW v_5m_volume AS
 SELECT
     market_id,
@@ -234,10 +238,11 @@ SELECT
     SUM(size_usd) AS volume_usd,
     COUNT(DISTINCT wallet) AS unique_wallets
 FROM v_deduped_trades
-WHERE timestamp >= CURRENT_TIMESTAMP - INTERVAL '2 hours'
+WHERE timestamp >= CURRENT_TIMESTAMP - INTERVAL '24 hours'
 GROUP BY 1, 2;
 
--- Modified Z-Score on 5-minute buckets (mirrors v_volume_anomalies logic)
+-- Modified Z-Score on 5-minute buckets
+-- Baseline uses the full 24-hour window; detection returns only the last 30 min.
 CREATE OR REPLACE VIEW v_volume_anomalies_5m AS
 WITH market_stats AS (
     SELECT
@@ -255,6 +260,10 @@ market_mad AS (
     FROM v_5m_volume v
     JOIN market_stats ms ON v.market_id = ms.market_id
     GROUP BY 1
+),
+recent AS (
+    SELECT * FROM v_5m_volume
+    WHERE bucket_5m >= CURRENT_TIMESTAMP - INTERVAL '30 minutes'
 )
 SELECT
     v.market_id,
@@ -269,7 +278,7 @@ SELECT
         THEN 0.6745 * (v.volume_usd - ms.median_vol) / mm.mad_vol
         ELSE NULL
     END AS modified_z_score
-FROM v_5m_volume v
+FROM recent v
 JOIN market_stats ms ON v.market_id = ms.market_id
 JOIN market_mad mm ON v.market_id = mm.market_id;
 
