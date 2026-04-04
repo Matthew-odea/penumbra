@@ -198,6 +198,7 @@ SELECT
     mm.mad_vol,
     CASE
         WHEN mm.mad_vol > 0
+         AND ms.median_vol >= 500  -- suppress dormant markets (median < $500/hr → noisy z-scores)
         THEN 0.6745 * (h.volume_usd - ms.median_vol) / mm.mad_vol
         ELSE NULL
     END AS modified_z_score
@@ -275,6 +276,7 @@ SELECT
     mm.mad_vol,
     CASE
         WHEN mm.mad_vol > 0
+         AND ms.median_vol >= 50  -- suppress dormant markets (median < $50/5-min → noisy z-scores)
         THEN 0.6745 * (v.volume_usd - ms.median_vol) / mm.mad_vol
         ELSE NULL
     END AS modified_z_score

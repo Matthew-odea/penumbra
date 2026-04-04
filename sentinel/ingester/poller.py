@@ -277,7 +277,8 @@ class TradePoller:
             logger.warning(
                 "Trade poll request error",
                 market=condition_id[:16],
-                error=str(exc)[:120],
+                exc_type=type(exc).__name__,
+                error=str(exc)[:120] or "(no message)",
             )
 
         return new_count, total_fetched

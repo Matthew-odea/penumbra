@@ -12,12 +12,48 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import logging
+import sys
 
 import structlog
 import uvicorn
 
 from sentinel.config import settings
 from sentinel.ingester.__main__ import run_ingester
+
+
+def _setup_logging() -> None:
+    """Configure stdlib logging + structlog to honour settings.log_level/log_format.
+
+    Without this, structlog uses its default pipeline which emits all levels
+    regardless of the LOG_LEVEL env var, and always uses the console renderer.
+    """
+    level = getattr(logging, settings.log_level.upper(), logging.INFO)
+    logging.basicConfig(
+        format="%(message)s",
+        stream=sys.stdout,
+        level=level,
+    )
+
+    shared_processors: list[structlog.types.Processor] = [
+        structlog.stdlib.filter_by_level,
+        structlog.stdlib.add_log_level,
+        structlog.processors.TimeStamper(fmt="%Y-%m-%d %H:%M:%S"),
+    ]
+
+    if settings.log_format == "json":
+        renderer: structlog.types.Processor = structlog.processors.JSONRenderer()
+    else:
+        renderer = structlog.dev.ConsoleRenderer()
+
+    structlog.configure(
+        processors=[*shared_processors, structlog.stdlib.PositionalArgumentsFormatter(), renderer],
+        wrapper_class=structlog.stdlib.BoundLogger,
+        context_class=dict,
+        logger_factory=structlog.stdlib.LoggerFactory(),
+        cache_logger_on_first_use=True,
+    )
+
 
 logger = structlog.get_logger()
 
@@ -70,6 +106,7 @@ async def _run_all(
 
 
 def main() -> None:
+    _setup_logging()
     parser = argparse.ArgumentParser(
         description="Penumbra — Polymarket informed-flow detection system",
     )

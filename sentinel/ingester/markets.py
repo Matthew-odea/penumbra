@@ -324,6 +324,11 @@ async def sync_markets(conn: Any, *, base_url: str | None = None) -> int:
     if len(synced_ids) > 50:
         synced_list = list(synced_ids)
         placeholders = ",".join("?" * len(synced_list))
+        # Count rows to be deactivated BEFORE the UPDATE — DuckDB rowcount returns -1 for DML.
+        deactivated = conn.execute(
+            f"SELECT COUNT(*) FROM markets WHERE active = true AND market_id NOT IN ({placeholders})",
+            synced_list,
+        ).fetchone()[0]
         conn.execute(
             f"""
             UPDATE markets
@@ -333,10 +338,6 @@ async def sync_markets(conn: Any, *, base_url: str | None = None) -> int:
             """,
             synced_list,
         )
-        deactivated = conn.execute(
-            f"SELECT COUNT(*) FROM markets WHERE active = false AND market_id NOT IN ({placeholders})",
-            synced_list,
-        ).fetchone()[0]
         if deactivated:
             logger.info("Deactivated unlisted markets", count=deactivated)
 
