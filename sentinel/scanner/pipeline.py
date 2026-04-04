@@ -112,17 +112,31 @@ class Scanner:
     # ── Per-trade processing ────────────────────────────────────────────
 
     def _is_excluded_market(self, market_id: str) -> bool:
-        """Return True if the market's category matches any excluded_categories pattern."""
-        if not settings.excluded_categories:
-            return False
+        """Return True if the market should be skipped by the scanner.
+
+        Two exclusion signals:
+        1. Category string match (for when Gamma API populates the category field).
+        2. Attractiveness score below threshold (catches sports/crypto even when
+           category is null — which is currently the case for all Gamma markets).
+        """
         if market_id not in self._excluded_cache:
             row = self._conn.execute(
-                "SELECT category FROM markets WHERE market_id = ?", [market_id]
+                "SELECT category, attractiveness_score FROM markets WHERE market_id = ?",
+                [market_id],
             ).fetchone()
-            cat = (row[0] or "").lower() if row else ""
-            self._excluded_cache[market_id] = any(
-                exc.lower() in cat for exc in settings.excluded_categories
-            )
+            if row:
+                cat = (row[0] or "").lower()
+                score: int | None = row[1]
+                cat_excluded = bool(settings.excluded_categories) and any(
+                    exc.lower() in cat for exc in settings.excluded_categories
+                )
+                score_excluded = (
+                    score is not None
+                    and score < settings.scanner_min_attractiveness
+                )
+                self._excluded_cache[market_id] = cat_excluded or score_excluded
+            else:
+                self._excluded_cache[market_id] = False
             if len(self._excluded_cache) > 5000:
                 self._excluded_cache.clear()
         return self._excluded_cache[market_id]

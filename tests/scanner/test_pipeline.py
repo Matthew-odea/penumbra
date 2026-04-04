@@ -26,6 +26,7 @@ def _init_db() -> duckdb.DuckDBPyConnection:
             active BOOLEAN DEFAULT TRUE,
             resolved BOOLEAN DEFAULT FALSE,
             resolved_price DECIMAL(10,6),
+            attractiveness_score INTEGER,
             last_synced TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     """)

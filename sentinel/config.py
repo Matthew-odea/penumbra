@@ -100,7 +100,13 @@ class Settings(BaseSettings):
     hot_market_refresh_interval_seconds: int = 1800  # 30 min
     # Category substrings to exclude from hot tier and signal generation.
     # Case-insensitive substring match against the market's category field.
+    # Note: Gamma API currently returns null for category on most markets, so this
+    # is supplemented by scanner_min_attractiveness below.
     excluded_categories: list[str] = ["sport", "crypto", "bitcoin"]
+    # Minimum attractiveness score to emit signals. Markets scored below this by the
+    # LLM (e.g. individual sports game matchups, crypto price bets) are skipped.
+    # Only applies when a score exists — unscored markets (NULL) are still scanned.
+    scanner_min_attractiveness: int = 30
 
     # ── Ingester ────────────────────────────────────────────────────────────
     ingester_batch_size: int = 20

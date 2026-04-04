@@ -10,6 +10,7 @@ informed-trading priority formula for use by the hot-tier poller.
 
 from __future__ import annotations
 
+import asyncio
 import csv
 import os
 import ssl
@@ -23,10 +24,6 @@ import structlog
 from sentinel.config import settings
 
 logger = structlog.get_logger()
-
-# Polymarket pagination sentinel
-_END_CURSOR = "LTE="
-_PAGE_SIZE = 1000  # server default
 
 # Build a lenient SSL context (Polymarket CDN cert can be flaky)
 _SSL_CTX = ssl.create_default_context()
@@ -130,7 +127,16 @@ async def fetch_all_markets(
             resp.raise_for_status()
             batch: list[dict[str, Any]] = resp.json()
 
+            # Empty page signals end of results. Guard: if we've already
+            # collected a substantial number of markets, an empty batch is
+            # a legitimate terminator. If we haven't collected any markets
+            # yet, raise so the caller can retry rather than silently
+            # returning an empty list.
             if not batch:
+                if not markets:
+                    raise RuntimeError(
+                        "Gamma API returned empty first page — possible API error"
+                    )
                 break
 
             markets.extend(batch)
@@ -139,6 +145,7 @@ async def fetch_all_markets(
 
             if page % 10 == 0:
                 logger.info("Market sync progress", page=page, found=len(markets))
+                await asyncio.sleep(0.1)  # brief yield to avoid hammering the API
 
             if len(batch) < limit:
                 break
@@ -274,7 +281,7 @@ def upsert_markets(conn: Any, markets: list[dict[str, Any]]) -> tuple[int, set[s
             condition_id,
             m.get("question", ""),
             m.get("slug", m.get("market_slug", "")),
-            m.get("category", ""),
+            m.get("category") or "",  # gamma returns null for most markets; default to ""
             end_dt.isoformat() if end_dt else "",
             str(float(m.get("volume") or 0)),
             str(float(m.get("liquidity") or 0)),
