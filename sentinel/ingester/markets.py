@@ -114,7 +114,7 @@ async def fetch_all_markets(
                 markets.append(m)
 
             cursor = body.get("next_cursor")
-            if page % 100 == 0:
+            if page % 10 == 0:
                 logger.info("Market sync progress", page=page, found=len(markets))
 
     logger.info("Market fetch complete", total=len(markets), pages=page)

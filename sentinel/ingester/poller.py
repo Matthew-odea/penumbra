@@ -179,15 +179,18 @@ class TradePoller:
         errors = sum(1 for r in results if isinstance(r, Exception))
         dedup = total_fetched - new_trades
 
-        logger.info(
-            "poll_cycle",
-            new=new_trades,
-            fetched=total_fetched,
-            dedup=dedup,
-            errors=errors if errors else None,
-            total=self._trade_count,
-            markets=len(condition_ids),
-        )
+        # Log every cycle with new trades, or every 60th cycle (~5 min heartbeat).
+        # Avoids 720 zero-new-trades lines per hour drowning real signals.
+        if new_trades > 0 or self._poll_count % 60 == 0:
+            logger.info(
+                "poll_cycle",
+                new=new_trades,
+                fetched=total_fetched,
+                dedup=dedup,
+                errors=errors if errors else None,
+                total=self._trade_count,
+                markets=len(condition_ids),
+            )
 
     # kept for backward compatibility (tests)
     async def _poll_all(self) -> None:

@@ -332,6 +332,7 @@ async def _periodic_status(
             "book_events": ws_b,
             "rest_trades": rest_t,
             "db_written": writer.total_written,
+            "ws_assets": len(listener._asset_ids),
         }
         if d_ws or d_book or d_rest:
             parts["Δws"] = d_ws
@@ -343,6 +344,145 @@ async def _periodic_status(
         if listener.reconnect_count:
             parts["ws_reconnects"] = listener.reconnect_count
         logger.info("status", **parts)
+
+
+async def _periodic_health_report(
+    conn: object,
+    listener: Listener,
+    poller: TradePoller,
+    scanner: Scanner | None,
+    interval_hours: int = 6,
+) -> None:
+    """Log a comprehensive pipeline health report every *interval_hours* hours.
+
+    Captures in-memory counters plus DB-derived stats (signal funnel, score
+    distribution, Z-score percentiles, budget, market coverage) so a single
+    log line gives a complete picture of the last window without grepping.
+    """
+    interval = interval_hours * 3600
+    window_label = f"{interval_hours}h"
+
+    # Snapshot counters at each period start so we can report deltas.
+    prev_ws_trades = 0
+    prev_rest_trades = 0
+    prev_scanned = 0
+    prev_signals = 0
+    prev_reconnects = 0
+
+    while True:
+        await asyncio.sleep(interval)
+
+        ws_trades = listener.trade_count
+        rest_trades = poller.trade_count
+        scanned = scanner.trades_scanned if scanner else 0
+        signals = scanner.signals_emitted if scanner else 0
+        reconnects = listener.reconnect_count
+
+        report: dict[str, object] = {
+            "window": window_label,
+            # In-memory deltas for the window
+            "ws_trades_window": ws_trades - prev_ws_trades,
+            "rest_trades_window": rest_trades - prev_rest_trades,
+            "scanned_window": scanned - prev_scanned,
+            "signals_emitted_window": signals - prev_signals,
+            "ws_reconnects_window": reconnects - prev_reconnects,
+            # Cumulative totals
+            "ws_trades_total": ws_trades,
+            "rest_trades_total": rest_trades,
+            "signals_total": signals,
+            "ws_reconnects_total": reconnects,
+            "ws_assets": len(listener._asset_ids),
+        }
+
+        prev_ws_trades = ws_trades
+        prev_rest_trades = rest_trades
+        prev_scanned = scanned
+        prev_signals = signals
+        prev_reconnects = reconnects
+
+        # DB-derived stats (best-effort — don't let failures crash the task)
+        try:
+            window_sql = f"INTERVAL '{interval_hours} hours'"
+
+            # Signal funnel for the window
+            funnel = conn.execute(  # type: ignore[attr-defined]
+                f"""
+                SELECT
+                    COUNT(*) FILTER (WHERE statistical_score >= 30)  AS total,
+                    COUNT(*) FILTER (WHERE statistical_score >= 60)  AS med,
+                    COUNT(*) FILTER (WHERE statistical_score >= 80)  AS high,
+                    ROUND(AVG(statistical_score), 1)                 AS avg_score,
+                    MAX(statistical_score)                           AS max_score
+                FROM signals
+                WHERE created_at >= CURRENT_TIMESTAMP - {window_sql}
+                """
+            ).fetchone()
+            if funnel:
+                report["sig_total"] = funnel[0]
+                report["sig_60plus"] = funnel[1]
+                report["sig_80plus"] = funnel[2]
+                report["sig_avg_score"] = funnel[3]
+                report["sig_max_score"] = funnel[4]
+
+            # Z-score distribution across hot-tier markets right now
+            zscore_row = conn.execute(  # type: ignore[attr-defined]
+                """
+                SELECT
+                    COUNT(*)                                                         AS markets_with_data,
+                    COUNT(*) FILTER (WHERE modified_z_score >= 2.0)                 AS above_threshold,
+                    COUNT(*) FILTER (WHERE modified_z_score >= 5.0)                 AS strong_spike,
+                    ROUND(MAX(modified_z_score), 1)                                 AS max_zscore,
+                    ROUND(PERCENTILE_CONT(0.5) WITHIN GROUP
+                        (ORDER BY modified_z_score), 2)                             AS median_zscore
+                FROM (
+                    SELECT market_id, MAX(modified_z_score) AS modified_z_score
+                    FROM v_volume_anomalies
+                    WHERE modified_z_score IS NOT NULL
+                    GROUP BY market_id
+                )
+                """
+            ).fetchone()
+            if zscore_row:
+                report["zscore_markets"] = zscore_row[0]
+                report["zscore_above_threshold"] = zscore_row[1]
+                report["zscore_strong"] = zscore_row[2]
+                report["zscore_max"] = zscore_row[3]
+                report["zscore_median"] = zscore_row[4]
+
+            # Budget consumed today
+            budget_row = conn.execute(  # type: ignore[attr-defined]
+                """
+                SELECT calls_used, calls_limit
+                FROM llm_budget
+                WHERE date = CURRENT_DATE AND tier = 'market_scoring'
+                """
+            ).fetchone()
+            if budget_row:
+                report["scoring_calls_today"] = budget_row[0]
+                report["scoring_budget"] = budget_row[1]
+                report["scoring_pct"] = round(budget_row[0] / budget_row[1] * 100, 1) if budget_row[1] else None
+
+            # Market coverage
+            coverage = conn.execute(  # type: ignore[attr-defined]
+                f"""
+                SELECT
+                    COUNT(*) FILTER (WHERE active = true AND resolved = false) AS active,
+                    COUNT(*) FILTER (WHERE attractiveness_score IS NOT NULL
+                                     AND active = true AND resolved = false)   AS scored,
+                    COUNT(*) FILTER (WHERE attractiveness_score IS NULL
+                                     AND active = true AND resolved = false)   AS unscored
+                FROM markets
+                """
+            ).fetchone()
+            if coverage:
+                report["markets_active"] = coverage[0]
+                report["markets_scored"] = coverage[1]
+                report["markets_unscored"] = coverage[2]
+
+        except Exception as exc:
+            report["db_stats_error"] = str(exc)
+
+        logger.info("health_report", **report)
 
 
 # ── Main entry point ──────────────────────────────────────────────────────────
@@ -568,6 +708,15 @@ async def run_ingester(
             name="status",
         )
     )
+
+    # 13. 6-hour health report (only when DB is available)
+    if not dry_run and conn is not None:
+        tasks.append(
+            asyncio.create_task(
+                _periodic_health_report(conn, listener, poller, scanner),
+                name="health_report",
+            )
+        )
 
     mode = "DRY RUN" if dry_run else "LIVE"
     logger.info(
