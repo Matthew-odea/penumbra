@@ -36,18 +36,20 @@ class TestUpsertMarkets:
         conn.close()
 
     def _make_market(self, condition_id="0xabc", **overrides):
+        # Uses Gamma API field names (conditionId, category, endDateIso, clobTokenIds, lastTradePrice)
         base = {
-            "condition_id": condition_id,
+            "conditionId": condition_id,
             "question": "Will X happen?",
-            "market_slug": "will-x-happen",
-            "tags": ["Biotech"],
-            "end_date_iso": "2026-12-31T00:00:00Z",
-            "volume": "1500000",
-            "liquidity": "250000",
-            "tokens": [
-                {"token_id": "0xtok1", "outcome": "Yes", "price": 0.73},
-                {"token_id": "0xtok2", "outcome": "No", "price": 0.27},
-            ],
+            "slug": "will-x-happen",
+            "category": "Biotech",
+            "endDateIso": "2026-12-31T00:00:00Z",
+            "volume": 1500000.0,
+            "liquidity": 250000.0,
+            "active": True,
+            "closed": False,
+            "archived": False,
+            "lastTradePrice": "0.73",
+            "clobTokenIds": ["0xtok1", "0xtok2"],
         }
         base.update(overrides)
         return base
@@ -84,8 +86,8 @@ class TestUpsertMarkets:
         assert count == 0
         assert ids == set()
 
-    def test_tags_stored_as_category(self, db_conn):
-        m = self._make_market(tags=["Politics", "USA"])
+    def test_category_stored(self, db_conn):
+        m = self._make_market(category="Politics,USA")
         upsert_markets(db_conn, [m])
         row = db_conn.execute("SELECT category FROM markets").fetchone()
         assert row[0] == "Politics,USA"

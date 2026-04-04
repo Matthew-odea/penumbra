@@ -72,6 +72,10 @@ class Scanner:
         self._trades_scanned = 0
         self._signals_emitted = 0
 
+        # Cache of market_id → is_excluded for settings.excluded_categories.
+        # Queried once per unique market then cached; cleared at 5k entries.
+        self._excluded_cache: dict[str, bool] = {}
+
     # ── Public API ──────────────────────────────────────────────────────
 
     async def run(self) -> None:
@@ -107,9 +111,29 @@ class Scanner:
 
     # ── Per-trade processing ────────────────────────────────────────────
 
+    def _is_excluded_market(self, market_id: str) -> bool:
+        """Return True if the market's category matches any excluded_categories pattern."""
+        if not settings.excluded_categories:
+            return False
+        if market_id not in self._excluded_cache:
+            row = self._conn.execute(
+                "SELECT category FROM markets WHERE market_id = ?", [market_id]
+            ).fetchone()
+            cat = (row[0] or "").lower() if row else ""
+            self._excluded_cache[market_id] = any(
+                exc.lower() in cat for exc in settings.excluded_categories
+            )
+            if len(self._excluded_cache) > 5000:
+                self._excluded_cache.clear()
+        return self._excluded_cache[market_id]
+
     async def _process_trade(self, trade: Trade) -> None:
         """Run the four detection layers on a single trade."""
         self._trades_scanned += 1
+
+        # Skip markets in excluded categories (e.g. sports, crypto)
+        if self._is_excluded_market(trade.market_id):
+            return
 
         # Accumulate into VPIN buckets (ALL trades, including small ones)
         try:

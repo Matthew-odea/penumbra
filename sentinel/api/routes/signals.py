@@ -167,7 +167,7 @@ async def list_signals(
                 d[k] = float(d[k])
         for k in ("trade_timestamp", "created_at"):
             if d[k] is not None:
-                d[k] = d[k].isoformat()
+                d[k] = d[k].isoformat() + "Z"
         d["explanation"] = _make_explanation(d)
         result.append(d)
 
@@ -248,6 +248,6 @@ async def get_signal(signal_id: str) -> dict:
             d[k] = float(d[k])
     for k in ("trade_timestamp", "created_at"):
         if k in d and d[k] is not None:
-            d[k] = d[k].isoformat()
+            d[k] = d[k].isoformat() + "Z"
     d["explanation"] = _make_explanation(d)
     return d

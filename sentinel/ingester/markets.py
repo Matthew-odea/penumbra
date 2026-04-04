@@ -37,8 +37,11 @@ _SSL_CTX.verify_mode = ssl.CERT_NONE
 # Weights mirrors the plan:
 #   (attractiveness / 100) × time_weight × uncertainty × liquidity_scaling
 # epoch() returns unix seconds in DuckDB.
+#
+# Exclusion clause for sports/crypto categories is injected at query time
+# from settings.excluded_categories (case-insensitive substring match).
 
-_PRIORITY_SQL = """
+_PRIORITY_SQL_TEMPLATE = """
 SELECT market_id
 FROM markets
 WHERE active = true
@@ -47,6 +50,7 @@ WHERE active = true
   AND liquidity_usd >= ?
   AND attractiveness_score IS NOT NULL
   AND attractiveness_score >= ?
+  {exclusion_clause}
 ORDER BY
     (attractiveness_score / 100.0)
     * CASE
@@ -66,56 +70,78 @@ LIMIT ?
 """
 
 # Fallback when insufficient scored markets exist: top by liquidity
-_FALLBACK_SQL = """
+_FALLBACK_SQL_TEMPLATE = """
 SELECT market_id
 FROM markets
 WHERE active = true
   AND resolved = false
   AND end_date > CURRENT_TIMESTAMP
   AND liquidity_usd >= ?
+  {exclusion_clause}
 ORDER BY liquidity_usd DESC
 LIMIT ?
 """
+
+
+def _build_exclusion_clause() -> str:
+    """Build a SQL WHERE clause fragment excluding configured categories."""
+    cats = settings.excluded_categories
+    if not cats:
+        return ""
+    conditions = " OR ".join(f"category ILIKE '%{cat}%'" for cat in cats)
+    return f"AND NOT ({conditions})"
 
 
 async def fetch_all_markets(
     *,
     base_url: str | None = None,
 ) -> list[dict[str, Any]]:
-    """Page through ``/markets`` and return active (non-closed) markets.
+    """Page through the Gamma API ``/markets`` and return active open markets.
 
-    Closed/archived markets are skipped — resolution data for markets we
-    already track is handled by ``sync_resolutions()`` instead.
+    The Gamma API (gamma-api.polymarket.com) is used instead of the CLOB API
+    because it returns ``volume`` and ``liquidity`` fields that the CLOB API
+    omits. It also provides ``clobTokenIds`` for WS subscriptions and
+    ``lastTradePrice`` for the YES-token price.
 
     Args:
-        base_url: Override for the REST URL (tests / dry-run).
+        base_url: Override for the Gamma API base URL (tests / dry-run).
 
     Returns:
         List of raw market dicts from the API.
     """
-    url = base_url or settings.polymarket_rest_url
-    cursor = "MA=="
+    url = (base_url or settings.polymarket_gamma_api_url).rstrip("/")
     markets: list[dict[str, Any]] = []
+    offset = 0
+    limit = 100
     page = 0
 
     async with httpx.AsyncClient(verify=False, timeout=30) as client:
-        while cursor and cursor != _END_CURSOR:
+        while True:
             resp = await client.get(
                 f"{url}/markets",
-                params={"next_cursor": cursor},
+                params={
+                    "limit": limit,
+                    "offset": offset,
+                    "active": "true",
+                    "closed": "false",
+                    "archived": "false",
+                },
             )
             resp.raise_for_status()
-            body = resp.json()
+            batch: list[dict[str, Any]] = resp.json()
+
+            if not batch:
+                break
+
+            markets.extend(batch)
+            offset += limit
             page += 1
 
-            for m in body.get("data", []):
-                if not m.get("active") or m.get("closed") or m.get("archived"):
-                    continue
-                markets.append(m)
-
-            cursor = body.get("next_cursor")
             if page % 10 == 0:
                 logger.info("Market sync progress", page=page, found=len(markets))
+
+            if len(batch) < limit:
+                break
 
     logger.info("Market fetch complete", total=len(markets), pages=page)
     return markets
@@ -128,19 +154,6 @@ def _parse_end_date(raw: str | None) -> datetime | None:
         return datetime.fromisoformat(raw.replace("Z", "+00:00"))
     except ValueError:
         return None
-
-
-def _extract_yes_price(tokens: list[dict[str, Any]]) -> float | None:
-    """Extract the YES token price (current market probability) from tokens array."""
-    for token in tokens:
-        if isinstance(token, dict) and str(token.get("outcome", "")).lower() == "yes":
-            raw = token.get("price")
-            if raw is not None:
-                try:
-                    return float(raw)
-                except (TypeError, ValueError):
-                    pass
-    return None
 
 
 def _extract_resolved_price(tokens: list[dict[str, Any]]) -> float | None:
@@ -235,31 +248,39 @@ def upsert_markets(conn: Any, markets: list[dict[str, Any]]) -> tuple[int, set[s
     rows: list[tuple[str, ...]] = []
     synced_ids: set[str] = set()
     for m in markets:
-        tokens = m.get("tokens") or []
-        last_price = _extract_yes_price(tokens)
-        resolved = bool(m.get("closed", False))
-        resolved_price = _extract_resolved_price(tokens) if resolved else None
-        active = not resolved and not m.get("archived", False)
-        end_dt = _parse_end_date(m.get("end_date_iso"))
-
-        condition_id = str(m["condition_id"])
+        # Gamma API fields (replaces CLOB API field mapping).
+        # volume/liquidity are top-level floats; clobTokenIds is a list of strings.
+        condition_id = str(m.get("conditionId") or m.get("condition_id", ""))
+        if not condition_id:
+            continue
         synced_ids.add(condition_id)
-        token_ids_str = ",".join(
-            str(t.get("token_id", ""))
-            for t in tokens
-            if t.get("token_id")
-        )
+
+        resolved = bool(m.get("closed", False))
+        active = m.get("active", False) and not resolved and not m.get("archived", False)
+        end_dt = _parse_end_date(m.get("endDateIso") or m.get("endDate") or m.get("end_date_iso"))
+
+        # lastTradePrice is the current YES-token price from the Gamma API.
+        ltp = m.get("lastTradePrice")
+        try:
+            last_price: float | None = float(ltp) if ltp is not None else None
+        except (TypeError, ValueError):
+            last_price = None
+        if last_price == 0.0:
+            last_price = None
+
+        token_ids_str = ",".join(str(t) for t in (m.get("clobTokenIds") or []) if t)
+
         rows.append((
             condition_id,
             m.get("question", ""),
-            m.get("market_slug", m.get("slug", "")),
-            ",".join(t for t in (m.get("tags") or []) if isinstance(t, str)),
+            m.get("slug", m.get("market_slug", "")),
+            m.get("category", ""),
             end_dt.isoformat() if end_dt else "",
-            str(float(m.get("volume", 0) or 0)),
-            str(float(m.get("liquidity", 0) or 0)),
+            str(float(m.get("volume") or 0)),
+            str(float(m.get("liquidity") or 0)),
             "true" if active else "false",
             "true" if resolved else "false",
-            str(resolved_price) if resolved_price is not None else "",
+            "",  # resolved_price: sync_resolutions() fills this via CLOB API
             str(last_price) if last_price is not None else "",
             now_str,
             token_ids_str,
@@ -360,7 +381,6 @@ async def sync_resolutions(conn: Any, *, base_url: str | None = None) -> int:
         """
         SELECT m.market_id FROM markets m
         WHERE m.active = false
-          AND m.resolved = false
           AND m.resolved_price IS NULL
           AND m.last_synced >= CURRENT_TIMESTAMP - INTERVAL '7 days'
           AND EXISTS (SELECT 1 FROM signals s WHERE s.market_id = m.market_id)
@@ -424,14 +444,18 @@ def get_priority_market_ids(
     liq = min_liquidity if min_liquidity is not None else settings.hot_market_min_liquidity
     score_thresh = min_score if min_score is not None else settings.hot_market_min_score
 
-    rows = conn.execute(_PRIORITY_SQL, [liq, score_thresh, n]).fetchall()
+    excl = _build_exclusion_clause()
+    priority_sql = _PRIORITY_SQL_TEMPLATE.format(exclusion_clause=excl)
+    fallback_sql = _FALLBACK_SQL_TEMPLATE.format(exclusion_clause=excl)
+
+    rows = conn.execute(priority_sql, [liq, score_thresh, n]).fetchall()
     result = [r[0] for r in rows]
 
     # Fill with liquidity-sorted unscored markets if hot tier is thin
     if len(result) < n:
         needed = n - len(result)
         existing = set(result)
-        fallback_rows = conn.execute(_FALLBACK_SQL, [liq, n * 2]).fetchall()
+        fallback_rows = conn.execute(fallback_sql, [liq, n * 2]).fetchall()
         for r in fallback_rows:
             if r[0] not in existing:
                 result.append(r[0])

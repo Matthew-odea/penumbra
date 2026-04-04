@@ -160,7 +160,7 @@ async def get_wallet_trades(
             if d[k] is not None:
                 d[k] = float(d[k])
         if d["timestamp"] is not None:
-            d["timestamp"] = d["timestamp"].isoformat()
+            d["timestamp"] = d["timestamp"].isoformat() + "Z"
         result.append(d)
     return result
 

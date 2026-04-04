@@ -24,6 +24,7 @@ class Settings(BaseSettings):
     polymarket_ws_url: str = "wss://ws-subscriptions-clob.polymarket.com/ws/market"
     polymarket_rest_url: str = "https://clob.polymarket.com"
     polymarket_data_api_url: str = "https://data-api.polymarket.com"
+    polymarket_gamma_api_url: str = "https://gamma-api.polymarket.com"
     # L2 auth — set via `python scripts/setup_l2.py`
     polymarket_private_key: str = ""
     polymarket_api_key: str = ""
@@ -95,8 +96,11 @@ class Settings(BaseSettings):
     hot_market_count: int = 100                 # Size of hot polling tier (REST poller)
     ws_market_count: int = 500                  # WS subscription breadth (wider than REST hot tier)
     hot_market_min_score: int = 60              # Attractiveness threshold for hot tier
-    hot_market_min_liquidity: float = 0.0       # 0: Polymarket API returns liquidity=None→0.0; priority formula deprioritises illiquid markets naturally
+    hot_market_min_liquidity: float = 1000.0    # Minimum liquidity_usd for hot tier (filters dead markets)
     hot_market_refresh_interval_seconds: int = 1800  # 30 min
+    # Category substrings to exclude from hot tier and signal generation.
+    # Case-insensitive substring match against the market's category field.
+    excluded_categories: list[str] = ["sport", "crypto", "bitcoin"]
 
     # ── Ingester ────────────────────────────────────────────────────────────
     ingester_batch_size: int = 20

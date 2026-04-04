@@ -74,7 +74,7 @@ async def timeseries(
 
     return [
         {
-            "bucket": r[0].isoformat(),
+            "bucket": r[0].isoformat() + "Z",
             "trades": r[1],
             "signals": r[2],
             "alerts": r[3],
@@ -257,7 +257,7 @@ async def ingestion() -> dict:
     """).fetchall()
 
     hourly: list[dict] = [
-        {"bucket": r[0].isoformat(), "trades": r[1]}
+        {"bucket": r[0].isoformat() + "Z", "trades": r[1]}
         for r in hourly_rows
     ]
 
@@ -275,7 +275,7 @@ async def ingestion() -> dict:
             "today": total_today,
         },
         "latest": {
-            "rest": latest_row[0].isoformat() if latest_row and latest_row[0] else None,
+            "rest": latest_row[0].isoformat() + "Z" if latest_row and latest_row[0] else None,
         },
         "markets_active_today": (latest_row[1] or 0) if latest_row else 0,
         "wallets_active_today": (latest_row[2] or 0) if latest_row else 0,
