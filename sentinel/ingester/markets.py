@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import csv
+import json
 import os
 import ssl
 import tempfile
@@ -277,7 +278,13 @@ def upsert_markets(conn: Any, markets: list[dict[str, Any]]) -> tuple[int, set[s
         if last_price == 0.0:
             last_price = None
 
-        token_ids_str = ",".join(str(t) for t in (m.get("clobTokenIds") or []) if t)
+        raw_token_ids = m.get("clobTokenIds") or []
+        if isinstance(raw_token_ids, str):
+            try:
+                raw_token_ids = json.loads(raw_token_ids)
+            except (json.JSONDecodeError, ValueError):
+                raw_token_ids = []
+        token_ids_str = ",".join(str(t) for t in raw_token_ids if t)
 
         rows.append((
             condition_id,
