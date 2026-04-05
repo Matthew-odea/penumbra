@@ -278,7 +278,10 @@ async def _periodic_hot_market_refresh(
         await asyncio.sleep(interval)
         try:
             new_ids = get_priority_market_ids(conn)  # type: ignore[arg-type]
-            poller.update_markets(new_ids)
+            if new_ids:  # guard: never wipe the poller on an empty DB result
+                poller.update_markets(new_ids)
+            else:
+                logger.warning("Hot tier refresh returned 0 markets — keeping existing list")
 
             ws_ids = get_priority_market_ids(conn, limit=settings.ws_market_count)  # type: ignore[arg-type]
             logger.info(

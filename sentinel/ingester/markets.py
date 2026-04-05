@@ -86,7 +86,9 @@ def _build_exclusion_clause() -> str:
     if not cats:
         return ""
     conditions = " OR ".join(f"category ILIKE '%{cat}%'" for cat in cats)
-    return f"AND NOT ({conditions})"
+    # Use IS NULL guard: Gamma API returns null for category on most markets.
+    # Without it, AND NOT (NULL ILIKE '...') = AND NULL = row excluded.
+    return f"AND (category IS NULL OR NOT ({conditions}))"
 
 
 async def fetch_all_markets(
