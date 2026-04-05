@@ -210,7 +210,7 @@ async def get_watchlist() -> list[dict]:
         ORDER BY priority_score DESC NULLS LAST
         LIMIT ?
         """,
-        [settings.hot_market_min_liquidity, settings.hot_market_min_score, settings.hot_market_count],
+        [settings.hot_market_min_liquidity, settings.hot_market_min_score, settings.ws_market_count],
     ).fetchall()
 
     columns = [
