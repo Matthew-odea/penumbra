@@ -49,6 +49,9 @@ class Settings(BaseSettings):
     alchemy_polygon_url: str = ""
     funding_anomaly_threshold_minutes: int = 4320  # 72 hours (tiered decay applied in scorer)
     new_wallet_large_trade_multiplier: float = 5.0  # trade > min_trade_size * this → suspicious
+    # On-chain trade polling (Polygon OrdersMatched events via eth_getLogs)
+    chain_poll_enabled: bool = True
+    chain_poll_interval_seconds: int = 10  # 10s for free tier; 4s on PAYG
 
     # ── Alerts ───────────────────────────────────────────────────────────
     alert_min_score: int = 80

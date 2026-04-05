@@ -24,6 +24,7 @@ import structlog
 
 from sentinel.config import settings
 from sentinel.db.init import init_schema
+from sentinel.ingester.chain_poller import ChainPoller, build_token_map
 from sentinel.ingester.listener import Listener
 from sentinel.ingester.markets import (
     fetch_active_markets,
@@ -265,13 +266,15 @@ async def _periodic_hot_market_refresh(
     conn: object,
     poller: TradePoller,
     listener: Listener,
+    chain_poller: ChainPoller | None = None,
     interval_seconds: int | None = None,
 ) -> None:
     """Refresh the hot-tier market list from the DB priority formula.
 
     Replaces the old /sampling-markets API call with a local DB query
-    using the attractiveness × time_weight × uncertainty × liquidity formula.
-    Also updates the WS subscription for any newly-prioritised markets.
+    using the attractiveness x time_weight x uncertainty x liquidity formula.
+    Also updates the WS subscription for any newly-prioritised markets,
+    and refreshes the chain poller's token_id to condition_id map.
     """
     interval = interval_seconds or settings.hot_market_refresh_interval_seconds
     while True:
@@ -305,6 +308,10 @@ async def _periodic_hot_market_refresh(
                 ]
                 if new_asset_ids:
                     await listener.set_subscriptions(new_asset_ids)
+
+            # Refresh chain poller token map (covers ALL markets, not just hot tier)
+            if chain_poller is not None:
+                chain_poller.update_token_map(build_token_map(conn))  # type: ignore[arg-type]
         except Exception as exc:
             logger.warning("Hot market refresh failed", error=str(exc))
 
@@ -668,31 +675,44 @@ async def run_ingester(
             )
         )
 
-        # 7. Periodic hot-market refresh from DB priority formula (every 30 min)
+        # 7. On-chain trade poller (Polygon OrdersMatched events)
+        chain_poller: ChainPoller | None = None
+        if settings.chain_poll_enabled and settings.alchemy_api_key:
+            token_map = build_token_map(conn)
+            chain_poller = ChainPoller(
+                on_trade=_on_trade,
+                token_map=token_map,
+            )
+            tasks.append(
+                asyncio.create_task(chain_poller.run(), name="chain_poller")
+            )
+        elif settings.chain_poll_enabled:
+            logger.warning("Chain poller enabled but no Alchemy API key — skipping")
+
+        # 8. Periodic hot-market refresh from DB priority formula (every 30 min)
         tasks.append(
             asyncio.create_task(
-                _periodic_hot_market_refresh(conn, poller, listener),
+                _periodic_hot_market_refresh(conn, poller, listener, chain_poller),
                 name="hot_market_refresh",
             )
         )
 
-    # 8. Batch writer timer
+    # 9. Batch writer timer
     tasks.append(
         asyncio.create_task(writer.run_timer(), name="writer_timer")
     )
 
-    # 9. WebSocket listener
+    # 10. WebSocket listener
     tasks.append(
         asyncio.create_task(listener.run(), name="ws_listener")
     )
 
-    # 10. REST trade poller (hot tier only)
+    # 11. REST trade poller (hot tier only)
     if poller._condition_ids:
         tasks.append(
             asyncio.create_task(poller.run(), name="trade_poller")
         )
 
-    # 11. Scanner
     scanner = None
     if not dry_run and conn is not None:
         scanner = Scanner(

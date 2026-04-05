@@ -34,6 +34,9 @@ dependencies = [
     
     # Async
     "websockets>=13.0",
+
+    # Blockchain
+    "eth-abi>=5.0.0",
 ]
 
 [project.optional-dependencies]
@@ -103,5 +106,6 @@ check_untyped_defs = true
 module = [
     "py_clob_client.*",
     "duckdb.*",
+    "eth_abi.*",
 ]
 ignore_missing_imports = true
