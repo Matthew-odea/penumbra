@@ -120,7 +120,8 @@ class ChainPoller:
             except Exception as exc:
                 logger.warning(
                     "Chain poll failed",
-                    error=str(exc)[:120],
+                    exc_type=type(exc).__name__,
+                    error=str(exc)[:200] or repr(exc),
                     backoff_s=backoff,
                 )
                 await asyncio.sleep(backoff)
