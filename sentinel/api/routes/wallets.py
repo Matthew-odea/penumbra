@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Query
 
-from sentinel.api.deps import get_db
+from sentinel.api.deps import get_db, to_iso
 
 router = APIRouter(tags=["wallets"])
 
@@ -160,7 +160,7 @@ async def get_wallet_trades(
             if d[k] is not None:
                 d[k] = float(d[k])
         if d["timestamp"] is not None:
-            d["timestamp"] = d["timestamp"].isoformat() + "Z"
+            d["timestamp"] = to_iso(d["timestamp"])
         result.append(d)
     return result
 

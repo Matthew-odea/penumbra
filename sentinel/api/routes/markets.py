@@ -6,7 +6,7 @@ from datetime import UTC, datetime
 
 from fastapi import APIRouter, HTTPException, Query
 
-from sentinel.api.deps import get_db
+from sentinel.api.deps import get_db, to_iso
 from sentinel.config import settings
 
 router = APIRouter(tags=["markets"])
@@ -139,7 +139,7 @@ async def list_markets(
         end_dt = d.get("end_date")
         for k in ("end_date", "last_signal_at"):
             if d[k] is not None:
-                d[k] = d[k].isoformat() + "Z"
+                d[k] = to_iso(d[k])
         d["hours_to_resolution"] = _hours_to_resolution(end_dt)
         d["tier"] = _tier(
             d["attractiveness_score"],
@@ -228,7 +228,7 @@ async def get_watchlist() -> list[dict]:
                 d[k] = float(d[k])
         end_dt = d.get("end_date")
         if end_dt is not None:
-            d["end_date"] = end_dt.isoformat() + "Z"
+            d["end_date"] = to_iso(end_dt)
         d["hours_to_resolution"] = _hours_to_resolution(end_dt)
         result.append(d)
     return result
@@ -263,7 +263,7 @@ async def get_market(market_id: str) -> dict:
             market[k] = float(market[k])
     end_dt = market.get("end_date")
     if end_dt is not None:
-        market["end_date"] = end_dt.isoformat() + "Z"
+        market["end_date"] = to_iso(end_dt)
     market["hours_to_resolution"] = _hours_to_resolution(end_dt)
     market["tier"] = _tier(
         market["attractiveness_score"],
@@ -301,7 +301,7 @@ async def get_market_volume(
 
     return [
         {
-            "hour": r[0].isoformat() + "Z",
+            "hour": to_iso(r[0]),
             "trade_count": r[1],
             "volume_usd": float(r[2]) if r[2] else 0,
             "unique_wallets": r[3],
@@ -327,7 +327,7 @@ async def get_market_anomalies(market_id: str) -> list[dict]:
 
     return [
         {
-            "hour": r[0].isoformat() + "Z",
+            "hour": to_iso(r[0]),
             "volume_usd": float(r[1]) if r[1] else 0.0,
             "trade_count": r[2],
             "z_score": round(float(r[3]), 2) if r[3] else 0.0,
@@ -362,7 +362,7 @@ async def get_market_vpin(
 
     return [
         {
-            "timestamp": r[0].isoformat() + "Z",
+            "timestamp": to_iso(r[0]),
             "imbalance": round(float(r[1]), 4) if r[1] is not None else None,
             "bucket_volume": float(r[2]) if r[2] else 0,
             "buy_vol": float(r[3]) if r[3] else 0,
@@ -393,7 +393,7 @@ async def get_market_lambda(
 
     return [
         {
-            "timestamp": r[0].isoformat() + "Z",
+            "timestamp": to_iso(r[0]),
             "lambda_value": float(r[1]) if r[1] is not None else None,
             "r_squared": float(r[2]) if r[2] is not None else None,
             "residual_std": float(r[3]) if r[3] is not None else None,

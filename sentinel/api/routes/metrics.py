@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Query
 
-from sentinel.api.deps import get_db
+from sentinel.api.deps import get_db, to_iso
 from sentinel.config import settings
 
 router = APIRouter(tags=["metrics"])
@@ -74,7 +74,7 @@ async def timeseries(
 
     return [
         {
-            "bucket": r[0].isoformat() + "Z",
+            "bucket": to_iso(r[0]),
             "trades": r[1],
             "signals": r[2],
             "alerts": r[3],
@@ -257,7 +257,7 @@ async def ingestion() -> dict:
     """).fetchall()
 
     hourly: list[dict] = [
-        {"bucket": r[0].isoformat() + "Z", "trades": r[1]}
+        {"bucket": to_iso(r[0]), "trades": r[1]}
         for r in hourly_rows
     ]
 
@@ -275,7 +275,7 @@ async def ingestion() -> dict:
             "today": total_today,
         },
         "latest": {
-            "rest": latest_row[0].isoformat() + "Z" if latest_row and latest_row[0] else None,
+            "rest": to_iso(latest_row[0]) if latest_row and latest_row[0] else None,
         },
         "markets_active_today": (latest_row[1] or 0) if latest_row else 0,
         "wallets_active_today": (latest_row[2] or 0) if latest_row else 0,

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Query
 
-from sentinel.api.deps import get_db
+from sentinel.api.deps import get_db, to_iso
 
 router = APIRouter(tags=["signals"])
 
@@ -167,7 +167,7 @@ async def list_signals(
                 d[k] = float(d[k])
         for k in ("trade_timestamp", "created_at"):
             if d[k] is not None:
-                d[k] = d[k].isoformat() + "Z"
+                d[k] = to_iso(d[k])
         d["explanation"] = _make_explanation(d)
         result.append(d)
 
@@ -248,6 +248,6 @@ async def get_signal(signal_id: str) -> dict:
             d[k] = float(d[k])
     for k in ("trade_timestamp", "created_at"):
         if k in d and d[k] is not None:
-            d[k] = d[k].isoformat() + "Z"
+            d[k] = to_iso(d[k])
     d["explanation"] = _make_explanation(d)
     return d
