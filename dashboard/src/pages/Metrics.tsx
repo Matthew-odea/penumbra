@@ -316,6 +316,8 @@ export default function Metrics() {
                       color: '#d4d4d4',
                     }}
                     labelStyle={{ color: '#737373' }}
+                    itemStyle={{ color: '#d4d4d4' }}
+                    cursor={{ fill: 'rgba(255,255,255,0.04)' }}
                     formatter={(value: number, name: string) => [
                       value,
                       name === 'trades' ? 'Trades' : 'Wallets',
@@ -375,6 +377,9 @@ export default function Metrics() {
                     fontSize: '11px',
                     color: '#d4d4d4',
                   }}
+                  labelStyle={{ color: '#737373' }}
+                  itemStyle={{ color: '#d4d4d4' }}
+                  cursor={{ fill: 'rgba(255,255,255,0.04)' }}
                   formatter={(value: number) => [value, 'Signals']}
                 />
                 <Bar dataKey="count" radius={[2, 2, 0, 0]} maxBarSize={32}>
@@ -468,6 +473,8 @@ export default function Metrics() {
                     color: '#d4d4d4',
                   }}
                   labelStyle={{ color: '#737373' }}
+                  itemStyle={{ color: '#d4d4d4' }}
+                  cursor={{ fill: 'rgba(255,255,255,0.04)' }}
                 />
                 <Legend wrapperStyle={{ fontSize: '11px', color: '#737373' }} iconType="square" />
                 <Bar dataKey="trades" fill="#404040" name="Trades" maxBarSize={16} />
@@ -610,6 +617,9 @@ export default function Metrics() {
                     fontSize: '11px',
                     color: '#d4d4d4',
                   }}
+                  labelStyle={{ color: '#737373' }}
+                  itemStyle={{ color: '#d4d4d4' }}
+                  cursor={{ fill: 'rgba(255,255,255,0.04)' }}
                   formatter={(value: number, name: string) =>
                     name === 'accuracy_pct' ? [`${value?.toFixed(1)}%`, 'Accuracy'] : [value, name]
                   }
