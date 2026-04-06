@@ -408,13 +408,7 @@ async def accuracy_calibration(
         FROM v_signal_outcomes
         WHERE created_at >= CURRENT_TIMESTAMP - INTERVAL '{days} days'
         GROUP BY 1
-        ORDER BY
-            CASE
-                WHEN statistical_score < 40 THEN 1
-                WHEN statistical_score < 60 THEN 2
-                WHEN statistical_score < 80 THEN 3
-                ELSE 4
-            END
+        ORDER BY score_bucket
     """).fetchall()
 
     return [
