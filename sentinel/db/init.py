@@ -350,6 +350,7 @@ SELECT
     s.size_usd,
     s.statistical_score,
     s.trade_timestamp,
+    s.created_at,
     m.question,
     m.resolved_price,
     CASE

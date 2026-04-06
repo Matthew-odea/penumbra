@@ -378,9 +378,15 @@ export default function Metrics() {
                   formatter={(value: number) => [value, 'Signals']}
                 />
                 <Bar dataKey="count" radius={[2, 2, 0, 0]} maxBarSize={32}>
-                  {Object.keys(scoreDist).map((range, i) => {
-                    const colors = ['#404040', '#525252', '#f59e0b', '#f97316', '#ef4444']
-                    return <Cell key={range} fill={colors[i] ?? '#525252'} />
+                  {Object.keys(scoreDist).map((range) => {
+                    const colorMap: Record<string, string> = {
+                      '0-19': '#404040',
+                      '20-39': '#525252',
+                      '40-59': '#f59e0b',
+                      '60-79': '#f97316',
+                      '80-100': '#ef4444',
+                    }
+                    return <Cell key={range} fill={colorMap[range] ?? '#525252'} />
                   })}
                 </Bar>
               </BarChart>
@@ -533,7 +539,7 @@ export default function Metrics() {
       {/* ── Row 5a: Accuracy Summary (Precision / Recall / F1) ───── */}
       {accSummary && accSummary.total_evaluated > 0 && (<>
         <div className="bg-amber-500/5 border border-amber-500/20 rounded-sm px-4 py-2.5 text-[11px] text-amber-400/80 leading-relaxed">
-          <span className="font-semibold">Accuracy caveat:</span> These metrics measure whether high-score signals predicted the
+          <span className="font-semibold">Accuracy (last 30 days):</span> Measures whether high-score signals predicted the
           correct market outcome (BUY on YES resolution = correct). This is a proxy for informed trading, not proof &mdash; a
           profitable trade may be lucky, and an insider trade may lose. Treat as directional signal quality, not ground truth.
         </div>

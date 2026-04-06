@@ -213,7 +213,7 @@ async def overview() -> dict:
         "scored": coverage_row[2] if coverage_row else 0,
         "unscored": coverage_row[3] if coverage_row else 0,
         "avg_hot_score": float(coverage_row[4]) if coverage_row and coverage_row[4] else None,
-        "hot_capacity": settings.hot_market_count,
+        "hot_capacity": settings.ws_market_count,
     }
 
     return {
@@ -284,15 +284,17 @@ async def ingestion() -> dict:
 
 
 @router.get("/metrics/accuracy")
-async def accuracy() -> list[dict]:
+async def accuracy(
+    days: int = Query(30, ge=1, le=365),
+) -> list[dict]:
     """Statistical score accuracy on resolved markets.
 
-    For each resolved market that has signals, computes how well high-scoring
-    signals predicted the outcome (BUY→YES, SELL→NO).
+    For each resolved market that has signals created within the last *days*,
+    computes how well high-scoring signals predicted the outcome (BUY->YES, SELL->NO).
     """
     db = get_db()
 
-    rows = db.execute("""
+    rows = db.execute(f"""
         SELECT
             s.market_id,
             m.question,
@@ -311,6 +313,7 @@ async def accuracy() -> list[dict]:
         JOIN markets m ON s.market_id = m.market_id
         WHERE m.resolved = TRUE
           AND m.resolved_price IS NOT NULL
+          AND s.created_at >= CURRENT_TIMESTAMP - INTERVAL '{days} days'
         GROUP BY s.market_id, m.question, m.category, m.resolved_price
         HAVING COUNT(*) >= 1
         ORDER BY signal_count DESC
@@ -335,15 +338,18 @@ async def accuracy() -> list[dict]:
 
 
 @router.get("/metrics/accuracy/summary")
-async def accuracy_summary() -> dict:
-    """Global precision, recall, F1 across all resolved markets.
+async def accuracy_summary(
+    days: int = Query(30, ge=1, le=365),
+) -> dict:
+    """Global precision, recall, F1 across resolved markets.
 
-    Uses the ``v_signal_outcomes`` view which joins signals → markets
-    and categorises each into TP/FP/FN/TN.
+    Uses the ``v_signal_outcomes`` view which joins signals to markets
+    and categorises each into TP/FP/FN/TN.  Scoped to signals created
+    within the last *days* to keep metrics fresh.
     """
     db = get_db()
 
-    row = db.execute("""
+    row = db.execute(f"""
         SELECT
             COUNT(*) FILTER (WHERE confusion = 'TP')  AS tp,
             COUNT(*) FILTER (WHERE confusion = 'FP')  AS fp,
@@ -351,6 +357,7 @@ async def accuracy_summary() -> dict:
             COUNT(*) FILTER (WHERE confusion = 'TN')  AS tn,
             COUNT(*) FILTER (WHERE confusion IS NOT NULL) AS total
         FROM v_signal_outcomes
+        WHERE created_at >= CURRENT_TIMESTAMP - INTERVAL '{days} days'
     """).fetchone()
 
     if not row:
@@ -377,17 +384,20 @@ async def accuracy_summary() -> dict:
 
 
 @router.get("/metrics/accuracy/calibration")
-async def accuracy_calibration() -> list[dict]:
+async def accuracy_calibration(
+    days: int = Query(30, ge=1, le=365),
+) -> list[dict]:
     """Calibration curve: for each score bucket, what fraction of trades were correct.
 
     Reveals whether higher scores actually predict better outcomes.
+    Scoped to signals within the last *days*.
     """
     db = get_db()
 
-    rows = db.execute("""
+    rows = db.execute(f"""
         SELECT
             CASE
-                WHEN statistical_score < 40 THEN '<40'
+                WHEN statistical_score < 40 THEN '30-39'
                 WHEN statistical_score < 60 THEN '40-59'
                 WHEN statistical_score < 80 THEN '60-79'
                 ELSE '80+'
@@ -396,8 +406,15 @@ async def accuracy_calibration() -> list[dict]:
             COUNT(*) FILTER (WHERE trade_correct = TRUE) AS correct,
             COUNT(*) FILTER (WHERE confusion = 'TP') AS true_positives
         FROM v_signal_outcomes
+        WHERE created_at >= CURRENT_TIMESTAMP - INTERVAL '{days} days'
         GROUP BY 1
-        ORDER BY 1
+        ORDER BY
+            CASE
+                WHEN statistical_score < 40 THEN 1
+                WHEN statistical_score < 60 THEN 2
+                WHEN statistical_score < 80 THEN 3
+                ELSE 4
+            END
     """).fetchall()
 
     return [
