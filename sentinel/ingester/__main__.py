@@ -614,13 +614,29 @@ async def run_ingester(
     tasks: list[asyncio.Task] = []
 
     if not dry_run and conn is not None:
-        # 1. Initial full market sync with retry (critical for hot tier)
-        logger.info("Running initial market sync (all markets)...")
-        count = await _sync_with_retry(conn, scoring_queue)
-        if count:
-            logger.info("Initial market sync complete", count=count)
+        # 1. Check if we can skip the blocking sync and use cached DB data.
+        #    The full gamma sync takes ~6 minutes (50k markets) and blocks all
+        #    trade ingestion.  If markets were synced within the last 4 hours,
+        #    start the pollers immediately and defer the sync to the background
+        #    periodic task (runs every market_sync_interval_hours).
+        stale_row = conn.execute(
+            "SELECT COUNT(*) FROM markets WHERE active = true AND last_synced >= CURRENT_TIMESTAMP - INTERVAL '4 hours'"
+        ).fetchone()
+        cached_markets = stale_row[0] if stale_row else 0
+
+        if cached_markets > 100:
+            logger.info(
+                "Skipping blocking market sync — using cached data",
+                cached_markets=cached_markets,
+            )
+            _enqueue_unscored_markets(conn, scoring_queue)
         else:
-            logger.warning("Initial market sync failed after retries — continuing with stale data")
+            logger.info("Running initial market sync (all markets)...")
+            count = await _sync_with_retry(conn, scoring_queue)
+            if count:
+                logger.info("Initial market sync complete", count=count)
+            else:
+                logger.warning("Initial market sync failed after retries — continuing with stale data")
 
         # 3. Now that we have the full DB, build the initial hot tier from priority formula.
         #    REST poller uses hot_market_count (100); WS subscribes to ws_market_count (500).
