@@ -174,7 +174,7 @@ class TestBuildTokenMap:
         """build_token_map should parse comma-separated token_ids."""
 
         class FakeConn:
-            def execute(self, sql: str) -> FakeConn:
+            def execute(self, sql: str, *args: object) -> FakeConn:
                 return self
 
             def fetchall(self) -> list[tuple[str, str]]:
@@ -184,7 +184,7 @@ class TestBuildTokenMap:
                     ("cond-3", "555"),
                 ]
 
-        token_map = build_token_map(FakeConn())
+        token_map = build_token_map(FakeConn(), signal_eligible_only=False)
         assert token_map == {
             "111": "cond-1",
             "222": "cond-1",
@@ -197,13 +197,13 @@ class TestBuildTokenMap:
         """Rows with empty token_ids should not produce map entries."""
 
         class FakeConn:
-            def execute(self, sql: str) -> FakeConn:
+            def execute(self, sql: str, *args: object) -> FakeConn:
                 return self
 
             def fetchall(self) -> list[tuple[str, str]]:
                 return [("cond-1", ",,,")]
 
-        token_map = build_token_map(FakeConn())
+        token_map = build_token_map(FakeConn(), signal_eligible_only=False)
         assert token_map == {}
 
 
