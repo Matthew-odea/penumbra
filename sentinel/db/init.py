@@ -73,7 +73,7 @@ WITH ranked AS (
                 date_trunc('second', timestamp),
                 ROUND(size_usd::DOUBLE, 2)
             ORDER BY
-                CASE WHEN source = 'rest' THEN 0 ELSE 1 END,
+                CASE source WHEN 'rest' THEN 0 WHEN 'chain' THEN 1 ELSE 2 END,
                 ingested_at DESC
         ) AS rn
     FROM trades

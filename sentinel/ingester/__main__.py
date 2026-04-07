@@ -262,6 +262,73 @@ async def _periodic_market_sync(
             logger.error("Periodic market sync failed after all retries")
 
 
+async def _periodic_data_retention(conn: object, interval_hours: int = 6) -> None:
+    """Prune old trades and book snapshots to keep DB size manageable.
+
+    Retention policy:
+    - trades on resolved markets: keep 7 days after resolution, then delete
+    - trades on active markets: keep all (needed for Z-score/volume views)
+    - book_snapshots: keep 3 days (only used for liquidity cliff detection)
+    - vpin_buckets: keep 7 days
+    """
+    while True:
+        await asyncio.sleep(interval_hours * 3600)
+        try:
+            # 1. Delete trades on markets that resolved >7 days ago
+            r1 = conn.execute(  # type: ignore[attr-defined]
+                """
+                SELECT COUNT(1) FROM trades t
+                JOIN markets m ON t.market_id = m.market_id
+                WHERE m.resolved = true
+                  AND m.last_synced < CURRENT_TIMESTAMP - INTERVAL '7 days'
+                """
+            ).fetchone()
+            stale_trades = r1[0] if r1 else 0
+
+            if stale_trades > 0:
+                conn.execute(  # type: ignore[attr-defined]
+                    """
+                    DELETE FROM trades
+                    WHERE market_id IN (
+                        SELECT market_id FROM markets
+                        WHERE resolved = true
+                          AND last_synced < CURRENT_TIMESTAMP - INTERVAL '7 days'
+                    )
+                    """
+                )
+                logger.info("Retention: pruned trades on old resolved markets", count=stale_trades)
+
+            # 2. Delete old book snapshots (>3 days)
+            r2 = conn.execute(  # type: ignore[attr-defined]
+                "SELECT COUNT(1) FROM book_snapshots WHERE ts < CURRENT_TIMESTAMP - INTERVAL '3 days'"
+            ).fetchone()
+            old_snaps = r2[0] if r2 else 0
+            if old_snaps > 0:
+                conn.execute(  # type: ignore[attr-defined]
+                    "DELETE FROM book_snapshots WHERE ts < CURRENT_TIMESTAMP - INTERVAL '3 days'"
+                )
+                logger.info("Retention: pruned old book snapshots", count=old_snaps)
+
+            # 3. Delete old VPIN buckets (>7 days)
+            r3 = conn.execute(  # type: ignore[attr-defined]
+                "SELECT COUNT(1) FROM vpin_buckets WHERE bucket_start < CURRENT_TIMESTAMP - INTERVAL '7 days'"
+            ).fetchone()
+            old_vpin = r3[0] if r3 else 0
+            if old_vpin > 0:
+                conn.execute(  # type: ignore[attr-defined]
+                    "DELETE FROM vpin_buckets WHERE bucket_start < CURRENT_TIMESTAMP - INTERVAL '7 days'"
+                )
+                logger.info("Retention: pruned old VPIN buckets", count=old_vpin)
+
+            # 4. Checkpoint to reclaim disk space
+            if stale_trades + old_snaps + old_vpin > 0:
+                conn.execute("CHECKPOINT")  # type: ignore[attr-defined]
+                logger.info("Retention: checkpoint complete")
+
+        except Exception as exc:
+            logger.warning("Data retention failed", error=str(exc))
+
+
 async def _periodic_hot_market_refresh(
     conn: object,
     poller: TradePoller,
@@ -710,6 +777,14 @@ async def run_ingester(
             asyncio.create_task(
                 _periodic_hot_market_refresh(conn, poller, listener, chain_poller),
                 name="hot_market_refresh",
+            )
+        )
+
+        # 8b. Data retention — prune old trades/snapshots every 6h
+        tasks.append(
+            asyncio.create_task(
+                _periodic_data_retention(conn),
+                name="data_retention",
             )
         )
 
