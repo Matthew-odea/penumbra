@@ -19,6 +19,7 @@ It consumes batches of ``Trade`` / ``BookEvent`` objects from an
 from __future__ import annotations
 
 import asyncio
+import time
 from typing import Any
 
 import structlog
@@ -31,7 +32,6 @@ from sentinel.scanner.price_impact import get_price_impact
 from sentinel.scanner.scorer import build_signal, write_signal
 from sentinel.scanner.volume import (
     get_coordination_signal,
-    get_hours_to_resolution,
     get_liquidity_cliff,
     get_market_concentration,
     get_ofi_for_market,
@@ -44,6 +44,98 @@ from sentinel.scanner.vpin import VPINTracker
 from sentinel.scanner.wallet_profiler import get_resolved_trade_count, get_wallet_profile
 
 logger = structlog.get_logger()
+
+
+class _MarketStatsCache:
+    """Per-market TTL cache for hot-path scanner queries.
+
+    Same market is queried for every trade; within a 30s window the answer
+    barely changes. Caching collapses many DB roundtrips into one per market.
+    Each store is bulk-cleared at ``max_entries`` to bound memory (matching
+    the eviction style of ``Scanner._excluded_cache``).
+    """
+
+    def __init__(self, conn: Any, ttl_seconds: float, max_entries: int = 5000) -> None:
+        self._conn = conn
+        self._ttl = ttl_seconds
+        self._max = max_entries
+        self._zscore_h: dict[str, tuple[float, float]] = {}
+        self._zscore_5m: dict[str, tuple[float, float]] = {}
+        self._ofi: dict[str, tuple[float, float]] = {}
+        self._cliff: dict[str, tuple[tuple[bool, float], float]] = {}
+        self._end_date: dict[str, tuple[Any, float]] = {}
+
+    def _maybe_evict(self, store: dict[str, Any]) -> None:
+        if len(store) > self._max:
+            store.clear()
+
+    def get_zscore(self, market_id: str) -> float:
+        now = time.monotonic()
+        cached = self._zscore_h.get(market_id)
+        if cached and cached[1] > now:
+            return cached[0]
+        val = get_zscore_for_market(self._conn, market_id)
+        self._zscore_h[market_id] = (val, now + self._ttl)
+        self._maybe_evict(self._zscore_h)
+        return val
+
+    def get_zscore_5m(self, market_id: str) -> float:
+        now = time.monotonic()
+        cached = self._zscore_5m.get(market_id)
+        if cached and cached[1] > now:
+            return cached[0]
+        val = get_zscore_5m_for_market(self._conn, market_id)
+        self._zscore_5m[market_id] = (val, now + self._ttl)
+        self._maybe_evict(self._zscore_5m)
+        return val
+
+    def get_ofi(self, market_id: str) -> float:
+        now = time.monotonic()
+        cached = self._ofi.get(market_id)
+        if cached and cached[1] > now:
+            return cached[0]
+        val = get_ofi_for_market(self._conn, market_id)
+        self._ofi[market_id] = (val, now + self._ttl)
+        self._maybe_evict(self._ofi)
+        return val
+
+    def get_liquidity_cliff(self, market_id: str) -> tuple[bool, float]:
+        now = time.monotonic()
+        cached = self._cliff.get(market_id)
+        if cached and cached[1] > now:
+            return cached[0]
+        val = get_liquidity_cliff(self._conn, market_id)
+        self._cliff[market_id] = (val, now + self._ttl)
+        self._maybe_evict(self._cliff)
+        return val
+
+    def get_hours_to_resolution(self, market_id: str, trade_timestamp: Any) -> int | None:
+        # Cache the market's end_date (rarely changes) and recompute hours from
+        # the live trade_timestamp on each call — avoids re-querying markets per trade.
+        from datetime import UTC
+
+        now = time.monotonic()
+        cached = self._end_date.get(market_id)
+        if cached and cached[1] > now:
+            end_date = cached[0]
+        else:
+            row = self._conn.execute(
+                "SELECT end_date FROM markets WHERE market_id = ?", [market_id],
+            ).fetchone()
+            end_date = row[0] if row else None
+            self._end_date[market_id] = (end_date, now + self._ttl)
+            self._maybe_evict(self._end_date)
+
+        if end_date is None:
+            return None
+        if hasattr(end_date, "tzinfo") and end_date.tzinfo is None:
+            end_date = end_date.replace(tzinfo=UTC)
+        if hasattr(trade_timestamp, "tzinfo") and trade_timestamp.tzinfo is None:
+            trade_timestamp = trade_timestamp.replace(tzinfo=UTC)
+        delta_seconds = (end_date - trade_timestamp).total_seconds()
+        if delta_seconds <= 0:
+            return None
+        return int(delta_seconds / 3600)
 
 
 class Scanner:
@@ -66,7 +158,9 @@ class Scanner:
         self._scanner_queue = scanner_queue
         self._dry_run = dry_run
         self._running = True
-        self._vpin_tracker = VPINTracker(conn)
+        self._plan_b_enabled = settings.enable_plan_b_collection
+        self._vpin_tracker = VPINTracker(conn) if self._plan_b_enabled else None
+        self._stats_cache = _MarketStatsCache(conn, settings.scanner_cache_ttl_seconds)
 
         # Counters
         self._trades_scanned = 0
@@ -149,13 +243,16 @@ class Scanner:
         if self._is_excluded_market(trade.market_id):
             return
 
-        # Accumulate into VPIN buckets (ALL trades, including small ones)
-        try:
-            self._vpin_tracker.add_trade(
-                trade.market_id, trade.side, float(trade.size_usd), trade.timestamp,
-            )
-        except Exception as exc:
-            logger.debug("VPIN accumulation failed", market=trade.market_id, error=str(exc))
+        # Accumulate into VPIN buckets (ALL trades, including small ones).
+        # Only when Plan B Phase 1 collection is enabled — VPIN/Lambda are
+        # data-collection-only and don't feed the current scorer.
+        if self._vpin_tracker is not None:
+            try:
+                self._vpin_tracker.add_trade(
+                    trade.market_id, trade.side, float(trade.size_usd), trade.timestamp,
+                )
+            except Exception as exc:
+                logger.debug("VPIN accumulation failed", market=trade.market_id, error=str(exc))
 
         # Skip tiny trades (for scoring, not for VPIN)
         if float(trade.size_usd) < settings.min_trade_size_usd:
@@ -170,8 +267,8 @@ class Scanner:
         z_score = 0.0
         ofi_score = 0.0
         try:
-            z_hourly = get_zscore_for_market(self._conn, trade.market_id)
-            z_5m = get_zscore_5m_for_market(self._conn, trade.market_id)
+            z_hourly = self._stats_cache.get_zscore(trade.market_id)
+            z_5m = self._stats_cache.get_zscore_5m(trade.market_id)
             z_score = max(z_hourly, z_5m)
         except Exception as exc:
             logger.debug("Z-score lookup failed", market=trade.market_id, error=str(exc))
@@ -188,7 +285,7 @@ class Scanner:
                 logger.debug("Size percentile lookup failed", market=trade.market_id, error=str(exc))
 
         try:
-            ofi_score = get_ofi_for_market(self._conn, trade.market_id)
+            ofi_score = self._stats_cache.get_ofi(trade.market_id)
         except Exception as exc:
             logger.debug("OFI lookup failed", market=trade.market_id, error=str(exc))
 
@@ -261,7 +358,9 @@ class Scanner:
         # 6. Time to resolution
         hours_to_resolution: int | None = None
         try:
-            hours_to_resolution = get_hours_to_resolution(self._conn, trade.market_id, trade.timestamp)
+            hours_to_resolution = self._stats_cache.get_hours_to_resolution(
+                trade.market_id, trade.timestamp,
+            )
         except Exception as exc:
             logger.debug("Hours-to-resolution lookup failed", market=trade.market_id, error=str(exc))
 
@@ -277,7 +376,7 @@ class Scanner:
         # 8. Liquidity cliff (spread widened >30% in last 10 min)
         liquidity_cliff = False
         try:
-            liquidity_cliff, _ = get_liquidity_cliff(self._conn, trade.market_id)
+            liquidity_cliff, _ = self._stats_cache.get_liquidity_cliff(trade.market_id)
         except Exception as exc:
             logger.debug("Liquidity cliff check failed", market=trade.market_id, error=str(exc))
 
@@ -291,21 +390,21 @@ class Scanner:
             except Exception as exc:
                 logger.debug("Position lookup failed", wallet=trade.wallet[:10], error=str(exc))
 
-        # 10. VPIN percentile (Plan B Phase 1 — data collection only)
+        # 10. VPIN percentile + 11. Kyle's Lambda (Plan B Phase 1 — data
+        # collection only, gated behind enable_plan_b_collection)
         vpin_percentile: float | None = None
-        try:
-            vpin_percentile = self._vpin_tracker.get_vpin_percentile(trade.market_id)
-        except Exception as exc:
-            logger.debug("VPIN lookup failed", market=trade.market_id, error=str(exc))
-
-        # 11. Kyle's Lambda (Plan B Phase 1 — data collection only)
         lambda_value: float | None = None
-        try:
-            lam = get_cached_lambda(self._conn, trade.market_id)
-            if lam is not None:
-                lambda_value = lam[0]  # Store lambda coefficient
-        except Exception as exc:
-            logger.debug("Lambda failed", market=trade.market_id, error=str(exc))
+        if self._plan_b_enabled and self._vpin_tracker is not None:
+            try:
+                vpin_percentile = self._vpin_tracker.get_vpin_percentile(trade.market_id)
+            except Exception as exc:
+                logger.debug("VPIN lookup failed", market=trade.market_id, error=str(exc))
+            try:
+                lam = get_cached_lambda(self._conn, trade.market_id)
+                if lam is not None:
+                    lambda_value = lam[0]  # Store lambda coefficient
+            except Exception as exc:
+                logger.debug("Lambda failed", market=trade.market_id, error=str(exc))
 
         # Build and score the signal
         signal = build_signal(

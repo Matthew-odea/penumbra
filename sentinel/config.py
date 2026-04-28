@@ -33,6 +33,10 @@ class Settings(BaseSettings):
 
     # ── DuckDB ──────────────────────────────────────────────────────────────
     duckdb_path: Path = Path("data/sentinel.duckdb")
+    # Cap DuckDB's memory pool. On a 4 GB t3.medium with the API + dashboard +
+    # ingester sharing RAM, an unbounded DuckDB will eat into swap and pin CPU
+    # while paging. 1.5 GB leaves headroom for the rest of the process.
+    duckdb_memory_limit: str = "1.5GB"
 
     # ── AWS Bedrock ─────────────────────────────────────────────────────────
     # Credentials are resolved via the boto3 default chain:
@@ -41,7 +45,7 @@ class Settings(BaseSettings):
     # This supports local dev, EC2/ECS IAM roles, and GitHub OIDC in CI.
     aws_region: str = "us-east-1"
     bedrock_tier1_model: str = "amazon.nova-lite-v1:0"
-    bedrock_market_scoring_daily_limit: int = 50000  # Market attractiveness scoring budget
+    bedrock_market_scoring_daily_limit: int = 5000  # Market attractiveness scoring budget
 
     # ── Polygon / Alchemy ───────────────────────────────────────────────────
     polygon_rpc_url: str = "https://polygon-rpc.com"
@@ -51,7 +55,7 @@ class Settings(BaseSettings):
     new_wallet_large_trade_multiplier: float = 5.0  # trade > min_trade_size * this → suspicious
     # On-chain trade polling (Polygon OrdersMatched events via eth_getLogs)
     chain_poll_enabled: bool = True
-    chain_poll_interval_seconds: int = 10  # 10s for free tier; 4s on PAYG
+    chain_poll_interval_seconds: int = 20  # 20s halves CU vs 10s; latency still beats REST CDN
 
     # ── Alerts ───────────────────────────────────────────────────────────
     alert_min_score: int = 80
@@ -61,7 +65,7 @@ class Settings(BaseSettings):
     # Fallback market liquidity when Polymarket API returns null (stored as 0.0).
     # Used as denominator in price impact formula so the component is never dead.
     price_impact_fallback_liquidity_usd: float = 10_000.0
-    min_trade_size_usd: float = 100.0
+    min_trade_size_usd: float = 250.0
     signal_min_score: int = 30
     wallet_min_trades: int = 5
     wallet_whitelist_win_rate: float = 0.65
@@ -96,8 +100,8 @@ class Settings(BaseSettings):
         return self
 
     # ── Market Intelligence ──────────────────────────────────────────────────
-    hot_market_count: int = 100                 # Size of hot polling tier (REST poller)
-    ws_market_count: int = 500                  # WS subscription breadth (wider than REST hot tier)
+    hot_market_count: int = 50                  # Size of hot polling tier (REST poller)
+    ws_market_count: int = 150                  # WS subscription breadth (wider than REST hot tier)
     hot_market_min_score: int = 60              # Attractiveness threshold for hot tier
     hot_market_min_liquidity: float = 1000.0    # Minimum liquidity_usd for hot tier (filters dead markets)
     hot_market_refresh_interval_seconds: int = 1800  # 30 min
@@ -109,15 +113,31 @@ class Settings(BaseSettings):
     # Minimum attractiveness score to emit signals. Markets scored below this by the
     # LLM (e.g. individual sports game matchups, crypto price bets) are skipped.
     # Only applies when a score exists — unscored markets (NULL) are still scanned.
-    scanner_min_attractiveness: int = 30
+    scanner_min_attractiveness: int = 50
 
     # ── Ingester ────────────────────────────────────────────────────────────
     ingester_batch_size: int = 20
     ingester_flush_interval_seconds: int = 1
     coordination_wallet_count_min: int = 3  # min distinct wallets to flag coordination
-    market_sync_interval_hours: int = 2     # Sync all markets every 2h (was 6h)
-    trade_poll_interval_seconds: int = 5
+    market_sync_interval_hours: int = 6     # Sync all markets every 6h
+    trade_poll_interval_seconds: int = 15   # REST is CDN-cached 5min; 5s polled wasted
     trade_poll_limit: int = 1000
+
+    # WS listener — chain poller covers wallet-attributed trades; WS only adds
+    # liquidity-cliff book_snapshots and last_trade_price (no wallet). Default
+    # off: saves a connection + per-trade dispatch cost. Re-enable to restore
+    # the liquidity-cliff multiplier (x1.2 boost on score).
+    ws_enabled: bool = False
+
+    # ── Scanner caching ─────────────────────────────────────────────────────
+    # Per-market TTL for hot-path scanner queries (Z-score, OFI, liquidity
+    # cliff, hours-to-resolution). Same market is queried for every trade;
+    # caching collapses N trades-in-window into a single DB roundtrip.
+    scanner_cache_ttl_seconds: float = 30.0
+
+    # Plan B Phase 1 (VPIN buckets + Kyle's Lambda) is data-collection only —
+    # not used in current scoring. Off by default to save CPU on every trade.
+    enable_plan_b_collection: bool = False
 
     # ── FastAPI ─────────────────────────────────────────────────────────────
     api_host: str = "0.0.0.0"

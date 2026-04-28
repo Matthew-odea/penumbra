@@ -447,6 +447,15 @@ def init_schema(db_path: Path | None = None) -> duckdb.DuckDBPyConnection:
 
     logger.info("Initializing DuckDB schema", path=str(db_path))
     conn = duckdb.connect(str(db_path))
+
+    # Cap memory before any query runs — keeps view evaluation from spilling
+    # into swap on small instances (t3.medium / 4 GB shared with API + scanner).
+    try:
+        conn.execute(f"PRAGMA memory_limit='{settings.duckdb_memory_limit}'")
+        logger.info("DuckDB memory_limit set", limit=settings.duckdb_memory_limit)
+    except Exception as exc:
+        logger.warning("Failed to set DuckDB memory_limit", error=str(exc))
+
     conn.execute(SCHEMA_SQL)
 
     # ── Migrations (idempotent) ─────────────────────────────────────────

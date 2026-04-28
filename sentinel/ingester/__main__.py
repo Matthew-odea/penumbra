@@ -311,19 +311,27 @@ async def _periodic_data_retention(conn: object, interval_hours: int = 6) -> Non
 
             # 3. Delete old VPIN buckets (>7 days)
             r3 = conn.execute(  # type: ignore[attr-defined]
-                "SELECT COUNT(1) FROM vpin_buckets WHERE bucket_start < CURRENT_TIMESTAMP - INTERVAL '7 days'"
+                "SELECT COUNT(1) FROM vpin_buckets WHERE bucket_end < CURRENT_TIMESTAMP - INTERVAL '7 days'"
             ).fetchone()
             old_vpin = r3[0] if r3 else 0
             if old_vpin > 0:
                 conn.execute(  # type: ignore[attr-defined]
-                    "DELETE FROM vpin_buckets WHERE bucket_start < CURRENT_TIMESTAMP - INTERVAL '7 days'"
+                    "DELETE FROM vpin_buckets WHERE bucket_end < CURRENT_TIMESTAMP - INTERVAL '7 days'"
                 )
                 logger.info("Retention: pruned old VPIN buckets", count=old_vpin)
 
-            # 4. Checkpoint to reclaim disk space
+            # 4. Checkpoint every cycle to reclaim disk space — DuckDB only
+            # frees space at checkpoint, so run it even when no rows pruned
+            # to recover space from earlier deletes (e.g. CASCADE from market
+            # deactivation).
+            conn.execute("CHECKPOINT")  # type: ignore[attr-defined]
             if stale_trades + old_snaps + old_vpin > 0:
-                conn.execute("CHECKPOINT")  # type: ignore[attr-defined]
-                logger.info("Retention: checkpoint complete")
+                logger.info(
+                    "Retention: checkpoint complete",
+                    pruned_trades=stale_trades,
+                    pruned_snapshots=old_snaps,
+                    pruned_vpin=old_vpin,
+                )
 
         except Exception as exc:
             logger.warning("Data retention failed", error=str(exc))
@@ -332,7 +340,7 @@ async def _periodic_data_retention(conn: object, interval_hours: int = 6) -> Non
 async def _periodic_hot_market_refresh(
     conn: object,
     poller: TradePoller,
-    listener: Listener,
+    listener: Listener | None,
     chain_poller: ChainPoller | None = None,
     interval_seconds: int | None = None,
 ) -> None:
@@ -360,7 +368,7 @@ async def _periodic_hot_market_refresh(
                 ws_markets=len(ws_ids),
             )
 
-            if ws_ids:
+            if ws_ids and listener is not None:
                 placeholders = ",".join("?" * len(ws_ids))
                 rows = conn.execute(  # type: ignore[attr-defined]
                     f"SELECT token_ids FROM markets WHERE market_id IN ({placeholders}) AND token_ids IS NOT NULL",
@@ -385,7 +393,7 @@ async def _periodic_hot_market_refresh(
 
 async def _periodic_status(
     writer: BatchWriter,
-    listener: Listener,
+    listener: Listener | None,
     poller: TradePoller,
     scanner: Scanner | None,
     interval: int = 30,
@@ -396,8 +404,8 @@ async def _periodic_status(
     prev_polled = 0
     while True:
         await asyncio.sleep(interval)
-        ws_t = listener.trade_count
-        ws_b = listener.book_event_count
+        ws_t = listener.trade_count if listener is not None else 0
+        ws_b = listener.book_event_count if listener is not None else 0
         rest_t = poller.trade_count
         d_ws = ws_t - prev_trades
         d_book = ws_b - prev_book
@@ -409,7 +417,7 @@ async def _periodic_status(
             "book_events": ws_b,
             "rest_trades": rest_t,
             "db_written": writer.total_written,
-            "ws_assets": len(listener._asset_ids),
+            "ws_assets": len(listener._asset_ids) if listener is not None else 0,
         }
         if d_ws or d_book or d_rest:
             parts["Δws"] = d_ws
@@ -418,14 +426,14 @@ async def _periodic_status(
         if scanner is not None:
             parts["scanned"] = scanner.trades_scanned
             parts["signals"] = scanner.signals_emitted
-        if listener.reconnect_count:
+        if listener is not None and listener.reconnect_count:
             parts["ws_reconnects"] = listener.reconnect_count
         logger.info("status", **parts)
 
 
 async def _periodic_health_report(
     conn: object,
-    listener: Listener,
+    listener: Listener | None,
     poller: TradePoller,
     scanner: Scanner | None,
     interval_hours: int = 6,
@@ -449,11 +457,11 @@ async def _periodic_health_report(
     while True:
         await asyncio.sleep(interval)
 
-        ws_trades = listener.trade_count
+        ws_trades = listener.trade_count if listener is not None else 0
         rest_trades = poller.trade_count
         scanned = scanner.trades_scanned if scanner else 0
         signals = scanner.signals_emitted if scanner else 0
-        reconnects = listener.reconnect_count
+        reconnects = listener.reconnect_count if listener is not None else 0
 
         report: dict[str, object] = {
             "window": window_label,
@@ -468,7 +476,7 @@ async def _periodic_health_report(
             "rest_trades_total": rest_trades,
             "signals_total": signals,
             "ws_reconnects_total": reconnects,
-            "ws_assets": len(listener._asset_ids),
+            "ws_assets": len(listener._asset_ids) if listener is not None else 0,
         }
 
         prev_ws_trades = ws_trades
@@ -670,13 +678,20 @@ async def run_ingester(
             except Exception as exc:
                 logger.warning("Backfill poll after WS reconnect failed", error=str(exc))
 
-    listener = Listener(
-        on_trade=_on_trade,
-        on_book_event=_on_book_event,
-        on_reconnect=_on_ws_reconnect,
-        asset_ids=asset_ids,
-        dry_run=dry_run,
-    )
+    listener: Listener | None = None
+    if settings.ws_enabled:
+        listener = Listener(
+            on_trade=_on_trade,
+            on_book_event=_on_book_event,
+            on_reconnect=_on_ws_reconnect,
+            asset_ids=asset_ids,
+            dry_run=dry_run,
+        )
+    else:
+        logger.info(
+            "WS listener disabled (ws_enabled=false) — chain poller covers wallets,"
+            " liquidity-cliff multiplier will degrade as book_snapshots age out",
+        )
 
     tasks: list[asyncio.Task] = []
 
@@ -713,7 +728,8 @@ async def run_ingester(
                 poller.update_markets(priority_ids)
 
             ws_ids = get_priority_market_ids(conn, limit=settings.ws_market_count)
-            if ws_ids:
+            ws_asset_ids: list[str] = []
+            if ws_ids and listener is not None:
                 placeholders = ",".join("?" * len(ws_ids))
                 rows = conn.execute(
                     f"SELECT token_ids FROM markets WHERE market_id IN ({placeholders}) AND token_ids IS NOT NULL",
@@ -725,12 +741,12 @@ async def run_ingester(
                 ]
                 if ws_asset_ids:
                     await listener.set_subscriptions(ws_asset_ids)
-                logger.info(
-                    "Initial hot tier from priority formula",
-                    rest_markets=len(priority_ids) if priority_ids else 0,
-                    ws_markets=len(ws_ids),
-                    ws_assets=len(ws_asset_ids) if ws_asset_ids else 0,
-                )
+            logger.info(
+                "Initial hot tier from priority formula",
+                rest_markets=len(priority_ids) if priority_ids else 0,
+                ws_markets=len(ws_ids) if listener is not None else 0,
+                ws_assets=len(ws_asset_ids),
+            )
         except Exception as exc:
             logger.warning("Failed to build initial hot tier from DB", error=str(exc))
 
@@ -793,10 +809,11 @@ async def run_ingester(
         asyncio.create_task(writer.run_timer(), name="writer_timer")
     )
 
-    # 10. WebSocket listener
-    tasks.append(
-        asyncio.create_task(listener.run(), name="ws_listener")
-    )
+    # 10. WebSocket listener (skipped when ws_enabled=false)
+    if listener is not None:
+        tasks.append(
+            asyncio.create_task(listener.run(), name="ws_listener")
+        )
 
     # 11. REST trade poller (hot tier only)
     if poller._condition_ids:
@@ -849,7 +866,8 @@ async def run_ingester(
     except asyncio.CancelledError:
         pass
     finally:
-        listener.stop()
+        if listener is not None:
+            listener.stop()
         poller.stop()
 
         await writer.flush()
@@ -869,7 +887,7 @@ async def run_ingester(
         logger.info(
             "Ingester stopped",
             total_trades=writer.total_written,
-            ws_book_events=listener.book_event_count,
+            ws_book_events=listener.book_event_count if listener is not None else 0,
             polled_trades=poller.trade_count,
             poll_cycles=poller.poll_count,
             scanner_trades=scanner.trades_scanned if scanner else 0,

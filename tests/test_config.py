@@ -14,9 +14,9 @@ class TestSettings:
         )
         assert s.duckdb_path.name == "sentinel.duckdb"
         assert s.zscore_threshold == 2.0
-        assert s.bedrock_market_scoring_daily_limit == 50000
+        assert s.bedrock_market_scoring_daily_limit == 5000
         assert s.alert_min_score == 80
-        assert s.hot_market_count == 100
+        assert s.hot_market_count == 50
         assert s.hot_market_min_score == 60
 
     def test_alchemy_url_resolution(self) -> None:
