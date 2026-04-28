@@ -33,10 +33,11 @@ class Settings(BaseSettings):
 
     # ── DuckDB ──────────────────────────────────────────────────────────────
     duckdb_path: Path = Path("data/sentinel.duckdb")
-    # Cap DuckDB's memory pool. On a 4 GB t3.medium with the API + dashboard +
-    # ingester sharing RAM, an unbounded DuckDB will eat into swap and pin CPU
-    # while paging. 1.5 GB leaves headroom for the rest of the process.
-    duckdb_memory_limit: str = "1.5GB"
+    # Optional cap on DuckDB's memory pool, applied via PRAGMA memory_limit.
+    # Empty = no cap (DuckDB self-tunes). Set via DUCKDB_MEMORY_LIMIT=2.5GB
+    # on small instances if swap pressure returns. Note: too tight a cap
+    # causes FATAL errors during WAL checkpoint on a multi-GB database.
+    duckdb_memory_limit: str = ""
 
     # ── AWS Bedrock ─────────────────────────────────────────────────────────
     # Credentials are resolved via the boto3 default chain:
